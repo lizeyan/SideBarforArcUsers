@@ -11,9 +11,9 @@ interface PinnedSnapshot
 }
 
 /**
- * Undoable action for deleting one or more pinned sites.
- * Snapshots pin data and position before deletion so they can be restored on undo.
- * Closes associated tabs on do(). Undo restores pin data only (no tab reopening).
+ * 可撤销地移除一个或多个 Favorite，并保存原数据与位置供 Undo 使用。
+ * Unpin 保留真实 Chrome Tab，使其成为普通 Tab；Undo 时若原 Tab 仍存在，
+ * 同时恢复 Favorite 数据和关联。
  */
 export class DeletePinnedSiteAction implements UndoableAction
 {
@@ -22,16 +22,22 @@ export class DeletePinnedSiteAction implements UndoableAction
   private snapshots: PinnedSnapshot[] = [];
   private getCurrentPins: () => readonly PinnedSite[];
   private getTabIdForPinned?: (pinnedId: string) => number | undefined;
+  private deassociatePinnedTab?: (pinnedId: string) => Promise<void> | void;
+  private restoreItemAssociation?: (tabId: number, itemKey: string) => Promise<void>;
 
   constructor(
     pinnedIds: string[],
     getCurrentPins: () => readonly PinnedSite[],
-    getTabIdForPinned?: (pinnedId: string) => number | undefined
+    getTabIdForPinned?: (pinnedId: string) => number | undefined,
+    deassociatePinnedTab?: (pinnedId: string) => Promise<void> | void,
+    restoreItemAssociation?: (tabId: number, itemKey: string) => Promise<void>
   )
   {
     this.pinnedIds = pinnedIds;
     this.getCurrentPins = getCurrentPins;
     this.getTabIdForPinned = getTabIdForPinned;
+    this.deassociatePinnedTab = deassociatePinnedTab;
+    this.restoreItemAssociation = restoreItemAssociation;
   }
 
   async do(): Promise<void>
@@ -82,14 +88,16 @@ export class DeletePinnedSiteAction implements UndoableAction
         this.snapshots.map(s => `"${s.pin.title}" (id=${s.pin.id}, idx=${s.index}, tabId=${s.tabId ?? 'none'})`));
     }
 
-    // Close associated tabs
-    const tabIds = this.snapshots
-      .map(s => s.tabId)
-      .filter((id): id is number => id !== undefined);
-    if (tabIds.length > 0)
+    // 解除 Favorite 关联但保留真实 Tab，使其立即成为 Tabs 区域中的普通 Tab。
+    if (this.deassociatePinnedTab)
     {
-      try { await chrome.tabs.remove(tabIds); }
-      catch { /* tabs may already be closed */ }
+      for (const snapshot of this.snapshots)
+      {
+        if (snapshot.tabId !== undefined)
+        {
+          await this.deassociatePinnedTab(snapshot.pin.id);
+        }
+      }
     }
 
     // Remove the pins, routed through PinnedSitesManager so it stays the only
@@ -112,6 +120,24 @@ export class DeletePinnedSiteAction implements UndoableAction
     await pinnedSitesManagerProxy.insertPins(
       this.snapshots.map(snapshot => ({ pin: snapshot.pin, index: snapshot.index }))
     );
+
+    // 原 Tab 仍存在时恢复 Favorite 关联；如果用户已关闭它，只恢复 Favorite 数据。
+    if (this.restoreItemAssociation)
+    {
+      for (const snapshot of this.snapshots)
+      {
+        if (snapshot.tabId === undefined) continue;
+        try
+        {
+          await chrome.tabs.get(snapshot.tabId);
+          await this.restoreItemAssociation(snapshot.tabId, `pinned-${snapshot.pin.id}`);
+        }
+        catch
+        {
+          // Tab 已关闭，无需恢复关联。
+        }
+      }
+    }
 
     if (import.meta.env.DEV)
     {

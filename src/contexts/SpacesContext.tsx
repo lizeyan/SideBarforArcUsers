@@ -7,6 +7,7 @@ import { spaceWindowStateProxy } from '../managers/proxies/spaceWindowStateProxy
 import { useSpaceWindowState } from '../hooks/useSpaceWindowState';
 import { spaceManagerProxy } from '../managers/proxies/spaceManagerProxy';
 import { useSpaces } from '../hooks/useSpaces';
+import { resolveActiveSpaceId } from '../utils/spaceSelection';
 
 // Re-export Space and ALL_SPACE so all existing imports from SpacesContext continue to work
 export type { Space } from '../utils/spaceMessages';
@@ -66,7 +67,7 @@ interface SpacesContextValue
   // listeners - and the next CRUD call would then persist that accident.
   // Build a new list and go through the context's own mutators instead.
   spaces: readonly Space[];
-  allSpaces: Space[];  // Includes "All" space at the beginning
+  allSpaces: Space[];  // 可导航的真实 Space，保留字段名以减少上游同步冲突
   activeSpace: Space;
   isInitialized: boolean;
   windowId: number | null;
@@ -165,6 +166,7 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       {
         setWindowId(window.id);
 
+        performance.mark('sidebar:spaces-start');
         Promise.all([
           spaceManagerProxy.load(),
           spaceWindowStateProxy.mirrorWindow(window.id),
@@ -181,10 +183,14 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }
 
           setIsInitialized(true);
+          performance.mark('sidebar:spaces-ready');
+          performance.measure('sidebar:spaces-load', 'sidebar:spaces-start', 'sidebar:spaces-ready');
         }).catch((error) =>
         {
           console.error('Failed to load spaces/window state:', error);
           setIsInitialized(true);
+          performance.mark('sidebar:spaces-ready');
+          performance.measure('sidebar:spaces-load', 'sidebar:spaces-start', 'sidebar:spaces-ready');
         });
       }
     });
@@ -226,7 +232,6 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const getSpaceById = useCallback((id: string): Space | undefined =>
   {
-    if (id === 'all') return ALL_SPACE;
     return spaces.find(s => s.id === id);
   }, [spaces]);
 
@@ -394,7 +399,7 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Get all tabs for a space (queries Chrome groups by matching Space name to group title)
   const getTabsForSpace = useCallback(async (spaceId: string): Promise<chrome.tabs.Tab[]> =>
   {
-    if (spaceId === 'all' || !windowId) return [];
+    if (!windowId) return [];
 
     const space = getSpaceById(spaceId);
     if (!space) return [];
@@ -453,21 +458,6 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Collect all tab IDs that belong to a space (group tabs + live bookmark tabs)
   const getTabIdsInSpace = useCallback(async (space: Space): Promise<number[]> =>
   {
-    // For "All" space, return all tabs in current window
-    if (space.id === 'all')
-    {
-      try
-      {
-        const tabs = await chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT });
-        return tabs.map(t => t.id).filter((id): id is number => id !== undefined);
-      }
-      catch (error)
-      {
-        console.error('Failed to query tabs:', error);
-        return [];
-      }
-    }
-
     if (!windowId) return [];
 
     const tabIdsToClose: number[] = [];
@@ -533,28 +523,31 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Derived state
   // ---------------------------------------------------------------------------
 
-  // All spaces including the "All" space at the beginning
+  // All Space 已移除；这里保留旧字段名，只返回真实 Space。
   const allSpaces = useMemo(() =>
   {
-    return [ALL_SPACE, ...spaces];
+    return [...spaces];
   }, [spaces]);
+
+  const resolvedActiveSpaceId = useMemo(
+    () => resolveActiveSpaceId(spaces, windowState.activeSpaceId),
+    [spaces, windowState.activeSpaceId]
+  );
 
   // Currently active space
   const activeSpace = useMemo(() =>
   {
-    return getSpaceById(windowState.activeSpaceId) || ALL_SPACE;
-  }, [windowState.activeSpaceId, getSpaceById]);
+    return (resolvedActiveSpaceId && getSpaceById(resolvedActiveSpaceId)) || ALL_SPACE;
+  }, [resolvedActiveSpaceId, getSpaceById]);
 
-  // If the restored activeSpaceId no longer exists (e.g. space was deleted), fall back to 'all'
+  // 旧版本的 all 或已删除 ID 都迁移到第一个真实 Space。
   useEffect(() =>
   {
-    if (windowState.activeSpaceId !== 'all' &&
-        spaces.length > 0 &&
-        !spaces.some(s => s.id === windowState.activeSpaceId))
+    if (resolvedActiveSpaceId && resolvedActiveSpaceId !== windowState.activeSpaceId)
     {
-      setActiveSpaceId('all');
+      setActiveSpaceId(resolvedActiveSpaceId);
     }
-  }, [windowState.activeSpaceId, spaces, setActiveSpaceId]);
+  }, [resolvedActiveSpaceId, windowState.activeSpaceId, setActiveSpaceId]);
 
   // ---------------------------------------------------------------------------
   // Context value
@@ -574,7 +567,7 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     getSpaceById,
     replaceSpaces,
     appendSpaces,
-    activeSpaceId: windowState.activeSpaceId,
+    activeSpaceId: resolvedActiveSpaceId ?? windowState.activeSpaceId,
     setActiveSpaceId,
     switchToSpace,
     getTabsForSpace,
@@ -596,6 +589,7 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     replaceSpaces,
     appendSpaces,
     windowState.activeSpaceId,
+    resolvedActiveSpaceId,
     setActiveSpaceId,
     switchToSpace,
     getTabsForSpace,

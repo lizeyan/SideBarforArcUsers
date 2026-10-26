@@ -60,7 +60,7 @@ export interface TestContext
 
   // Bookmark/pinned <-> live tab association (BookmarkTabsContext)
   openBookmarkTab: (bookmarkId: string, url: string, spaceId?: string) => Promise<number | undefined>;
-  openPinnedTab: (pinnedId: string, url: string) => Promise<number | undefined>;
+  openPinnedTab: (pinnedId: string, url: string, spaceId?: string) => Promise<number | undefined>;
   isBookmarkLoaded: (bookmarkId: string) => boolean;
   isPinnedLoaded: (pinnedId: string) => boolean;
   getTabIdForBookmark: (bookmarkId: string) => number | undefined;
@@ -72,7 +72,8 @@ export interface TestContext
   associateExistingTab: (tabId: number, bookmarkId: string, spaceId?: string) => Promise<void>;
   // What a bookmark row's "Move To Tabs" menu item calls: breaks the
   // association, leaving the tab open where it is.
-  deassociateBookmarkTab: (bookmarkId: string) => void;
+  deassociateBookmarkTab: (bookmarkId: string) => Promise<void>;
+  deassociatePinnedTab: (pinnedId: string) => Promise<void>;
 
   // Pinned sites (usePinnedSites). The whole hook surface, not just add and
   // remove: Section P's point is that every one of these reaches

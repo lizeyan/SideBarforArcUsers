@@ -106,6 +106,7 @@ export interface PinnedSitesApi
   removePins(ids: string[]): PinnedSite[];
   insertPins(placements: PinnedSitePlacement[]): PinnedSite[];
   updatePin(id: string, edit: PinnedSiteEdit): PinnedSite[];
+  renamePinIfUnchanged(id: string, expectedTitle: string, expectedUrl: string, newTitle: string): PinnedSite[];
   resetFavicon(id: string, favicon?: string): PinnedSite[];
   movePin(activeId: string, overId: string, position: PinnedSiteDropPosition): PinnedSite[];
   duplicatePin(id: string, newId: string, overrides?: PinnedSiteDuplicateOverrides): PinnedSite[];
@@ -195,6 +196,25 @@ export function applyUpdatePin(
           iconColor: edit.emoji ? undefined : (edit.customIconName ? edit.iconColor : undefined),
           emoji: edit.customIconName ? undefined : edit.emoji,
         }
+      : site
+  );
+}
+
+/**
+ * 仅当固定项目仍保持请求开始时的标题和 URL 时写入 AI 名称。
+ * 这个条件在后台单写入者中检查，避免慢请求覆盖用户后续的手动编辑。
+ */
+export function applyRenamePinIfUnchanged(
+  sites: readonly PinnedSite[],
+  id: string,
+  expectedTitle: string,
+  expectedUrl: string,
+  newTitle: string
+): PinnedSite[]
+{
+  return sites.map(site =>
+    site.id === id && site.title === expectedTitle && site.url === expectedUrl
+      ? { ...site, title: newTitle }
       : site
   );
 }

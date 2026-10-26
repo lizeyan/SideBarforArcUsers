@@ -174,12 +174,8 @@ export const A4_PINNED_TAB_MOVED: TestCase = {
     openRegularTab({ url: testUrl('a4-dummy-video'), spaceRef: 'spaceB', tabRef: 'dummyVideo' }),
     openPinnedTab({ pinRef: 'pin', url: testUrl('a4-pin'), tabRef: 'pinTab' }),
     assertPinnedLoaded('pin', true),
-    assertTabUngrouped('pinTab'), // pinned tabs open ungrouped by default, same as A.5c
-    // Deliberately group it now (doc step 2) - the whole point of this case
-    // is confirming a pin's association survives being grouped, unlike a
-    // bookmark tab's move in A.2. Pinned sites are never registered in
-    // tabSpaceRegistry, so no deassociation should fire.
-    moveTabNative({ tabRef: 'pinTab', targetSpaceRef: 'spaceA' }),
+    // Favorite 打开后应立即同步到当前 Space 的 Chrome 原生组。
+    assertTabInSpace('pinTab', 'spaceA'),
     assertPinnedLoaded('pin', true),
     assertTabExists('pinTab', true),
 
@@ -300,14 +296,15 @@ export const A5C_PINNED_TAB_UNGROUP: TestCase = {
 
     openPinnedTab({ pinRef: 'pinOpen', url: testUrl('a5c-open'), tabRef: 'tabOpen' }),
     assertPinnedLoaded('pinOpen', true),
-    assertTabUngrouped('tabOpen'), // pinned tabs open ungrouped by default
-    moveTabNative({ tabRef: 'tabOpen', targetSpaceRef: 'spaceA' }),
+    assertTabInSpace('tabOpen', 'spaceA'),
     assertPinnedLoaded('pinOpen', true),
     ungroupTab('tabOpen'),
-    assertPinnedLoaded('pinOpen', true), // keeps tracking regardless of group
+    // Favorite 仍然固定，background 应把它恢复到登记的 Space 组。
+    assertTabInSpace('tabOpen', 'spaceA'),
+    assertPinnedLoaded('pinOpen', true),
 
     openPinnedTab({ pinRef: 'pinClosed', url: testUrl('a5c-closed'), tabRef: 'tabClosed' }),
-    moveTabNative({ tabRef: 'tabClosed', targetSpaceRef: 'spaceA' }),
+    assertTabInSpace('tabClosed', 'spaceA'),
     pause(
       'Manual step: ungroup the pinned tab while the panel is closed',
       [
@@ -317,10 +314,8 @@ export const A5C_PINNED_TAB_UNGROUP: TestCase = {
         'Reopen the sidebar panel to resume.',
       ]
     ),
-    // Without this, "still loaded" was already true before the pause and
-    // would pass even if the manual ungroup was skipped entirely - this is
-    // the one assertion that actually depends on it having happened.
-    assertTabUngrouped('tabClosed'),
+    // Side Panel 关闭时 background 仍应把 Favorite 恢复到原 Space 组。
+    assertTabInSpace('tabClosed', 'spaceA'),
     assertPinnedLoaded('pinClosed', true),
   ],
 };

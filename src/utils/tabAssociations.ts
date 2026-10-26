@@ -1,15 +1,58 @@
 // Shared functions for tab association storage
 // Used by both background.ts and BookmarkTabsContext.tsx
 
+import { TabAssociationBackupStore } from '../stores/tabAssociationBackupStore.ts';
+import { TabAssociationSessionStore } from '../stores/tabAssociationSessionStore.ts';
+import type {
+  TabAssociationBackupEntry,
+  WindowAssociationBackup,
+} from '../stores/tabAssociationBackupStore.ts';
+import { mergeRestoredTabAssociations } from './restoreTabAssociations.ts';
+
+export type { TabAssociationBackupEntry, WindowAssociationBackup } from '../stores/tabAssociationBackupStore.ts';
+
 // Storage key helper
 const getStorageKey = (windowId: number) => `tabAssociations_${windowId}`;
+
+const tabAssociationSessionStore = new TabAssociationSessionStore({
+  get: (key) => chrome.storage.session.get(key),
+  set: (values) => chrome.storage.session.set(values),
+});
+
+export const WAIT_FOR_TAB_ASSOCIATIONS_READY = 'wait-for-tab-associations-ready';
+
+type StorageChangeListener = (
+  changes: Record<string, chrome.storage.StorageChange>,
+  areaName: string
+) => void;
+
+interface StorageChangeEvent
+{
+  addListener: (listener: StorageChangeListener) => void;
+  removeListener: (listener: StorageChangeListener) => void;
+}
+
+/** 订阅当前窗口的 session 关联变化，并返回对应的清理函数。 */
+export function subscribeToTabAssociationChanges(
+  windowId: number,
+  onChange: () => void,
+  event: StorageChangeEvent = chrome.storage.onChanged
+): () => void
+{
+  const storageKey = getStorageKey(windowId);
+  const listener: StorageChangeListener = (changes, areaName) =>
+  {
+    if (areaName === 'session' && changes[storageKey]) onChange();
+  };
+
+  event.addListener(listener);
+  return () => event.removeListener(listener);
+}
 
 // Get all associations for a window
 export async function getTabAssociations(windowId: number): Promise<Record<number, string>>
 {
-  const key = getStorageKey(windowId);
-  const result = await chrome.storage.session.get(key);
-  return result[key] || {};
+  return tabAssociationSessionStore.read(windowId);
 }
 
 // Check if a tab is managed (has an association)
@@ -19,14 +62,6 @@ export async function isManagedTab(windowId: number, tabId: number): Promise<boo
   return tabId in associations;
 }
 
-// Check if a tab is a pinned-site managed tab
-export async function isPinnedManagedTab(windowId: number, tabId: number): Promise<boolean>
-{
-  const associations = await getTabAssociations(windowId);
-  const itemKey = associations[tabId];
-  return itemKey !== undefined && itemKey.startsWith('pinned-');
-}
-
 // Store an association
 export async function storeTabAssociation(
   windowId: number,
@@ -34,19 +69,13 @@ export async function storeTabAssociation(
   itemKey: string
 ): Promise<void>
 {
-  const key = getStorageKey(windowId);
-  const associations = await getTabAssociations(windowId);
-  associations[tabId] = itemKey;
-  await chrome.storage.session.set({ [key]: associations });
+  await tabAssociationSessionStore.save(windowId, tabId, itemKey);
 }
 
 // Remove an association
 export async function removeTabAssociation(windowId: number, tabId: number): Promise<void>
 {
-  const key = getStorageKey(windowId);
-  const associations = await getTabAssociations(windowId);
-  delete associations[tabId];
-  await chrome.storage.session.set({ [key]: associations });
+  await tabAssociationSessionStore.remove(windowId, tabId);
 }
 
 // Set all associations for a window (used during rebuild)
@@ -55,8 +84,7 @@ export async function setTabAssociations(
   associations: Record<number, string>
 ): Promise<void>
 {
-  const key = getStorageKey(windowId);
-  await chrome.storage.session.set({ [key]: associations });
+  await tabAssociationSessionStore.replace(windowId, associations);
 }
 
 // =============================================================================
@@ -64,20 +92,11 @@ export async function setTabAssociations(
 // One storage entry per window + a separate index of all window IDs.
 // =============================================================================
 
-const BACKUP_KEY_PREFIX = 'tabAssociationsBackup_';
-const BACKUP_WINDOW_IDS_KEY = 'tabAssociationsBackupWindowIds';
-
-export interface TabAssociationBackupEntry
-{
-  tabId: number;
-  url: string;
-  tabIndex: number;
-}
-
-// itemKey → { tabId, url, tabIndex } for one window
-export type WindowAssociationBackup = Record<string, TabAssociationBackupEntry>;
-
-const backupKey = (windowId: number) => `${BACKUP_KEY_PREFIX}${windowId}`;
+const tabAssociationBackupStore = new TabAssociationBackupStore({
+  get: (keys) => chrome.storage.local.get(keys),
+  set: (values) => chrome.storage.local.set(values),
+  remove: (keys) => chrome.storage.local.remove(keys),
+});
 
 function getDomain(url: string): string
 {
@@ -104,64 +123,10 @@ function formatBackup(backup: WindowAssociationBackup): string
   return entries.map(([key, e]) => `  ${key}: tabId=${e.tabId}, tabIndex=${e.tabIndex}, url=${e.url}`).join('\n');
 }
 
-// Read the backup for a single window from local storage
-async function getWindowBackup(windowId: number): Promise<WindowAssociationBackup>
-{
-  const key = backupKey(windowId);
-  const result = await chrome.storage.local.get(key);
-  return result[key] ?? {};
-}
-
-async function getBackupWindowIds(): Promise<number[]>
-{
-  const result = await chrome.storage.local.get(BACKUP_WINDOW_IDS_KEY);
-  return result[BACKUP_WINDOW_IDS_KEY] ?? [];
-}
-
-async function addBackupWindowId(windowId: number): Promise<void>
-{
-  const ids = await getBackupWindowIds();
-  if (!ids.includes(windowId))
-  {
-    await chrome.storage.local.set({ [BACKUP_WINDOW_IDS_KEY]: [...ids, windowId] });
-  }
-}
-
-// Remove backup data for windows that no longer exist and return the cleaned list.
-async function pruneStaleBackupWindowIds(ids: number[]): Promise<number[]>
-{
-  const existingWindows = await chrome.windows.getAll();
-  const existingIds = new Set(existingWindows.map(w => w.id!));
-
-  const staleIds = ids.filter(id => !existingIds.has(id));
-  if (staleIds.length > 0)
-  {
-    await chrome.storage.local.remove(staleIds.map(id => backupKey(id)));
-    if (import.meta.env.DEV)
-    {
-      console.log('[TabAssociationBackup] pruned stale windows:', staleIds);
-    }
-  }
-
-  return ids.filter(id => existingIds.has(id));
-}
-
-async function removeBackupWindowId(windowId: number): Promise<void>
-{
-  const ids = await getBackupWindowIds();
-  const pruned = await pruneStaleBackupWindowIds(ids);
-  const filtered = pruned.filter(id => id !== windowId);
-  if (filtered.length !== ids.length)
-  {
-    await chrome.storage.local.set({ [BACKUP_WINDOW_IDS_KEY]: filtered });
-  }
-  await chrome.storage.local.remove(backupKey(windowId));
-}
-
 // Remove all backup entries for a window
 export async function removeWindowAssociationBackup(windowId: number): Promise<void>
 {
-  await removeBackupWindowId(windowId);
+  await tabAssociationBackupStore.removeWindow(windowId);
   if (import.meta.env.DEV)
   {
     console.log('[TabAssociationBackup] removeWindow', windowId);
@@ -174,12 +139,10 @@ export async function saveTabAssociationBackup(
   entry: TabAssociationBackupEntry
 ): Promise<void>
 {
-  const windowBackup = await getWindowBackup(windowId);
-  windowBackup[itemKey] = entry;
-  await chrome.storage.local.set({ [backupKey(windowId)]: windowBackup });
-  await addBackupWindowId(windowId);
+  await tabAssociationBackupStore.save(windowId, itemKey, entry);
   if (import.meta.env.DEV)
   {
+    const windowBackup = await tabAssociationBackupStore.read(windowId);
     console.log(`[TabAssociationBackup] save window=${windowId} ${itemKey}\n${formatBackup(windowBackup)}`);
   }
 }
@@ -189,19 +152,10 @@ export async function removeTabAssociationBackup(
   itemKey: string
 ): Promise<void>
 {
-  const windowBackup = await getWindowBackup(windowId);
-  if (!(itemKey in windowBackup)) return;
-  delete windowBackup[itemKey];
-  if (Object.keys(windowBackup).length === 0)
-  {
-    await removeWindowAssociationBackup(windowId);
-  }
-  else
-  {
-    await chrome.storage.local.set({ [backupKey(windowId)]: windowBackup });
-  }
+  await tabAssociationBackupStore.remove(windowId, itemKey);
   if (import.meta.env.DEV)
   {
+    const windowBackup = await tabAssociationBackupStore.read(windowId);
     console.log(`[TabAssociationBackup] remove window=${windowId} ${itemKey}\n${formatBackup(windowBackup)}`);
   }
 }
@@ -213,22 +167,10 @@ export async function updateTabAssociationBackupIndices(
   itemKeyToIndex: Record<string, number>
 ): Promise<void>
 {
-  const windowBackup = await getWindowBackup(windowId);
-  let changed = false;
-
-  for (const [itemKey, tabIndex] of Object.entries(itemKeyToIndex))
-  {
-    const entry = windowBackup[itemKey];
-    if (!entry || entry.tabIndex === tabIndex) continue;
-    windowBackup[itemKey] = { ...entry, tabIndex };
-    changed = true;
-  }
-
-  if (!changed) return;
-
-  await chrome.storage.local.set({ [backupKey(windowId)]: windowBackup });
+  await tabAssociationBackupStore.updateIndices(windowId, itemKeyToIndex);
   if (import.meta.env.DEV)
   {
+    const windowBackup = await tabAssociationBackupStore.read(windowId);
     console.log(`[TabAssociationBackup] updateIndices window=${windowId}\n${formatBackup(windowBackup)}`);
   }
 }
@@ -506,19 +448,24 @@ function matchBackupWindows(
   return ctx.result;
 }
 
-// Build a filtered backup containing only matched entries, updated with new tabIds.
-function buildFilteredBackup(
-  backup: WindowAssociationBackup,
-  tabMatches: Record<string, number>
+/** 用当前真实 Tab 信息重建可持久化 backup，顺便修复旧 tabId 和 index。 */
+function buildBackupFromAssociations(
+  associations: Record<number, string>,
+  tabs: chrome.tabs.Tab[]
 ): WindowAssociationBackup
 {
-  const filtered: WindowAssociationBackup = {};
-  for (const [itemKey, tabId] of Object.entries(tabMatches))
+  const tabsById = new Map(tabs.map(tab => [tab.id, tab]));
+  const backup: WindowAssociationBackup = {};
+
+  // 只保留具备 URL、id 和 index 的真实 Tab。
+  for (const [tabIdText, itemKey] of Object.entries(associations))
   {
-    const entry = backup[itemKey];
-    if (entry) filtered[itemKey] = { ...entry, tabId };
+    const tabId = Number(tabIdText);
+    const tab = tabsById.get(tabId);
+    if (!tab?.url || tab.id === undefined || tab.index === undefined) continue;
+    backup[itemKey] = { tabId: tab.id, url: tab.url, tabIndex: tab.index };
   }
-  return filtered;
+  return backup;
 }
 
 // Restore tab associations from local backup on extension startup.
@@ -526,7 +473,7 @@ function buildFilteredBackup(
 // for matched tabs, and cleans up unmatched backup data.
 export async function restoreTabAssociationBackup(): Promise<void>
 {
-  const backupWindowIds = await getBackupWindowIds();
+  const backupWindowIds = await tabAssociationBackupStore.windowIds();
   if (backupWindowIds.length === 0)
   {
     if (import.meta.env.DEV)
@@ -539,7 +486,7 @@ export async function restoreTabAssociationBackup(): Promise<void>
   // Pre-fetch all data in parallel
   const [allWindows, ...backupValues] = await Promise.all([
     chrome.windows.getAll({ populate: true }),
-    ...backupWindowIds.map(id => getWindowBackup(id)),
+    ...backupWindowIds.map(id => tabAssociationBackupStore.read(id)),
   ]);
 
   const backups = new Map<number, WindowAssociationBackup>();
@@ -568,10 +515,7 @@ export async function restoreTabAssociationBackup(): Promise<void>
   // Match windows and restore associations
   const matches = matchBackupWindows(backupWindowIds, backups, allWindows);
 
-  // Collect storage operations to batch where possible
-  const storageWrites: Record<string, unknown> = {};
-  const storageRemovals: string[] = [];
-  const newBackupWindowIds: number[] = [];
+  const restoredBackups = new Map<number, WindowAssociationBackup>();
 
   for (const [backupId, { currentId, matchType, tabMatches }] of matches)
   {
@@ -581,31 +525,31 @@ export async function restoreTabAssociationBackup(): Promise<void>
       console.log(`[TabAssociationBackup] restoring: backup=${backupId} → window=${currentId} (${matchType}, ${matchedCount} tabs)`);
     }
 
-    // Restore session associations for matched tabs
-    const associations: Record<number, string> = {};
+    const backupAssociations: Record<number, string> = {};
     for (const [itemKey, tabId] of Object.entries(tabMatches))
     {
-      associations[tabId] = itemKey;
-    }
-    await setTabAssociations(currentId, associations);
-
-    // Update backup: keep only matched entries under the current window ID
-    const backup = backups.get(backupId)!;
-    const filtered = buildFilteredBackup(backup, tabMatches);
-
-    if (backupId !== currentId)
-    {
-      storageRemovals.push(backupKey(backupId));
+      backupAssociations[tabId] = itemKey;
     }
 
-    if (Object.keys(filtered).length > 0)
+    const currentWindow = allWindows.find(window => window.id === currentId);
+    const currentTabs = currentWindow?.tabs ?? [];
+    const validTabIds = new Set(
+      currentTabs
+        .map(tab => tab.id)
+        .filter((tabId): tabId is number => tabId !== undefined)
+    );
+    const sessionAssociations = await getTabAssociations(currentId);
+    const mergedAssociations = mergeRestoredTabAssociations(
+      sessionAssociations,
+      backupAssociations,
+      validTabIds
+    );
+    await setTabAssociations(currentId, mergedAssociations);
+
+    const healedBackup = buildBackupFromAssociations(mergedAssociations, currentTabs);
+    if (Object.keys(healedBackup).length > 0)
     {
-      storageWrites[backupKey(currentId)] = filtered;
-      newBackupWindowIds.push(currentId);
-    }
-    else
-    {
-      storageRemovals.push(backupKey(currentId));
+      restoredBackups.set(currentId, healedBackup);
     }
   }
 
@@ -617,13 +561,7 @@ export async function restoreTabAssociationBackup(): Promise<void>
     {
       console.log(`[TabAssociationBackup] removing unmatched backup window=${backupId}`);
     }
-    storageRemovals.push(backupKey(backupId));
   }
 
-  // Batch all storage operations
-  storageWrites[BACKUP_WINDOW_IDS_KEY] = newBackupWindowIds;
-  await Promise.all([
-    chrome.storage.local.set(storageWrites),
-    storageRemovals.length > 0 ? chrome.storage.local.remove(storageRemovals) : Promise.resolve(),
-  ]);
+  await tabAssociationBackupStore.replaceAll(restoredBackups);
 }

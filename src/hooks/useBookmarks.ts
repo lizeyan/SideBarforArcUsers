@@ -1,18 +1,57 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useSyncExternalStore } from 'react';
 import { createChromeErrorHandler } from '../utils/chromeError';
+import { BookmarkTreeSource, SharedBookmarkStore } from '../stores/sharedBookmarkStore';
 
 export type SortOption = 'none' | 'name' | 'dateAdded';
 
 // Module-level flag shared across all hook instances
 let isBatchOperation = false;
 
-// Registry of refresh callbacks from all hook instances
-const refreshCallbacks = new Set<() => void>();
+/** 为共享 Store 提供 Chrome 书签 API，并集中管理五类变更监听器。 */
+const createChromeBookmarkSource = (): BookmarkTreeSource | undefined =>
+{
+  if (typeof chrome === 'undefined' || !chrome.bookmarks) return undefined;
 
-// Refresh all hook instances
-const refreshAll = () => {
-  refreshCallbacks.forEach(cb => cb());
+  return {
+    readTree: (onResult) =>
+    {
+      chrome.bookmarks.getTree((tree) =>
+      {
+        onResult(tree, chrome.runtime.lastError?.message ?? null);
+      });
+    },
+    subscribe: (onChange) =>
+    {
+      const onCreated = () => onChange();
+      const onRemoved = () => onChange();
+      const onChanged = () => onChange();
+      const onMoved = () => onChange();
+      const onChildrenReordered = () => onChange();
+
+      chrome.bookmarks.onCreated.addListener(onCreated);
+      chrome.bookmarks.onRemoved.addListener(onRemoved);
+      chrome.bookmarks.onChanged.addListener(onChanged);
+      chrome.bookmarks.onMoved.addListener(onMoved);
+      chrome.bookmarks.onChildrenReordered.addListener(onChildrenReordered);
+
+      return () =>
+      {
+        chrome.bookmarks.onCreated.removeListener(onCreated);
+        chrome.bookmarks.onRemoved.removeListener(onRemoved);
+        chrome.bookmarks.onChanged.removeListener(onChanged);
+        chrome.bookmarks.onMoved.removeListener(onMoved);
+        chrome.bookmarks.onChildrenReordered.removeListener(onChildrenReordered);
+      };
+    },
+  };
 };
+
+const sharedBookmarkStore = new SharedBookmarkStore(
+  createChromeBookmarkSource,
+  () => isBatchOperation
+);
+
+const refreshAll = () => sharedBookmarkStore.refresh();
 
 export { refreshAll as refreshAllBookmarks };
 
@@ -32,61 +71,18 @@ export async function runBatchOperation<T>(fn: () => Promise<T>): Promise<T>
 }
 
 export const useBookmarks = () => {
-  const [bookmarks, setBookmarks] = useState<chrome.bookmarks.BookmarkTreeNode[]>([]);
+  const bookmarkSnapshot = useSyncExternalStore(
+    sharedBookmarkStore.subscribe,
+    sharedBookmarkStore.getSnapshot,
+    sharedBookmarkStore.getSnapshot
+  );
+  const bookmarks = bookmarkSnapshot.bookmarks;
   const [error, setError] = useState<string | null>(null);
 
   const handleError = useCallback(
     createChromeErrorHandler('Bookmark', setError),
     []
   );
-
-  const fetchBookmarks = useCallback(() => {
-    if (typeof chrome !== 'undefined' && chrome.bookmarks) {
-      chrome.bookmarks.getTree((tree) => {
-        if (!handleError('fetch')) {
-          if (tree && tree.length > 0) {
-            setBookmarks(tree[0].children || []);
-          }
-        }
-      });
-    }
-    else {
-      setError('Unable to access browser bookmarks');
-    }
-  }, [handleError]);
-
-  useEffect(() => {
-    fetchBookmarks();
-
-    // Register this instance's refresh callback
-    refreshCallbacks.add(fetchBookmarks);
-
-    const listeners = [
-      chrome.bookmarks?.onCreated,
-      chrome.bookmarks?.onRemoved,
-      chrome.bookmarks?.onChanged,
-      chrome.bookmarks?.onMoved,
-      chrome.bookmarks?.onChildrenReordered,
-    ];
-
-    // Debounce to coalesce rapid events
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const handleUpdate = () => {
-      if (isBatchOperation) return;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        fetchBookmarks();
-      }, 50);
-    };
-
-    listeners.forEach(listener => listener?.addListener(handleUpdate));
-
-    return () => {
-      listeners.forEach(listener => listener?.removeListener(handleUpdate));
-      refreshCallbacks.delete(fetchBookmarks);
-      if (debounceTimer) clearTimeout(debounceTimer);
-    };
-  }, [fetchBookmarks]);
 
   // const removeBookmark = useCallback((id: string) => {
   //   chrome.bookmarks.removeTree(id, () => {
@@ -485,6 +481,6 @@ export const useBookmarks = () => {
     getBookmarkSegments,
     duplicateBookmark,
     getAllBookmarksInFolder,
-    error
+    error: error ?? bookmarkSnapshot.error
   };
 };

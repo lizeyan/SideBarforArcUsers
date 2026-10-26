@@ -176,23 +176,21 @@ export const getHexColorStyle = (hex: string): HexColorStyle =>
 // Returns a CSS color for the sidebar background.
 // alpha: 0-1, where 1.0 = full intensity (user-facing 100%).
 //
-// Both modes blend from their neutral base toward accentDarkHex at alpha*50%:
-//   Light: white  → accentDarkHex at 50%  (e.g. blue gives rgb(197,218,252) at 100%)
-//   Dark:  gray-900 → accentDarkHex at 50% (opaque - avoids looking bright when
-//          dark:bg-gray-900 is removed from the container)
+// Arc 的 Space 背景只保留轻微色相。这里限制最大混合比例，避免用户把强度
+// 调到 100% 后出现大面积高饱和色，同时继续尊重原有的强度设置。
 export const getSpaceBgColor = (color: string, isDark: boolean, alpha: number = 1): string => {
   const accentHex = GROUP_COLORS[color]?.accentDarkHex ?? (isValidHex(color) ? color : '#BDC1C6');
   const [aR, aG, aB] = hexToRgb(accentHex);
 
   if (isDark) {
-    const blend = 0.50 * alpha;
+    const blend = 0.18 * alpha;
     // gray-900 = #111827 = rgb(17, 24, 39)
     const [bgR, bgG, bgB] = [17, 24, 39];
     return `rgb(${Math.round(bgR + (aR - bgR) * blend)}, ${Math.round(bgG + (aG - bgG) * blend)}, ${Math.round(bgB + (aB - bgB) * blend)})`;
   }
   else
   {
-    const blend = 0.75 * alpha;
+    const blend = 0.22 * alpha;
     // white = rgb(255, 255, 255)
     return `rgb(${Math.round(255 + (aR - 255) * blend)}, ${Math.round(255 + (aG - 255) * blend)}, ${Math.round(255 + (aB - 255) * blend)})`;
   }

@@ -1,13 +1,17 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { Globe, Pencil, Trash, X, RotateCcw, Play, Copy, ExternalLink, Link, ArrowRightFromLine } from 'lucide-react';
+import React, { lazy, Suspense, useState, useRef, useCallback } from 'react';
+import { Globe, Pencil, Trash, X, RotateCcw, Play, Copy, ExternalLink, Link, ArrowRightFromLine, Sparkles } from 'lucide-react';
 import { Dialog } from './Dialog';
 import { PinnedSite, getFaviconUrl, fetchFaviconAsBase64 } from '../hooks/usePinnedSites';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import clsx from 'clsx';
 import * as ContextMenu from './menu/ContextMenu';
-import { IconColorPicker, PINNED_SITE_COLORS, DEFAULT_ICON_COLOR } from './IconColorPicker';
+import { PINNED_SITE_COLORS, DEFAULT_ICON_COLOR } from '../utils/iconPickerOptions';
 import { iconToDataUrl } from '../utils/iconify';
 import { createPinDragData, DropData, DropPosition, DragFormat, acceptsFormats } from '../types/dragDrop';
+
+const IconColorPicker = lazy(() =>
+  import('./IconColorPicker').then(module => ({ default: module.IconColorPicker }))
+);
 
 /**
  * Shared visual component for pinned icon rendering.
@@ -62,6 +66,7 @@ interface PinnedIconProps
   ) => void;
   onResetFavicon: (id: string) => void;
   onDuplicate: (id: string) => void;
+  onAiRename?: () => void;
   onOpen: (site: PinnedSite) => void;
   onClose?: (id: string) => void;
   onMoveToNewWindow?: (id: string) => void;
@@ -82,6 +87,7 @@ export const PinnedIcon = ({
   onUpdate,
   onResetFavicon: _onResetFavicon,
   onDuplicate,
+  onAiRename,
   onOpen,
   onClose,
   onMoveToNewWindow,
@@ -276,8 +282,9 @@ export const PinnedIcon = ({
             {...listeners}
             title={site.title}
             data-dnd-id={pinId}
+            data-active={isActive || undefined}
             className={clsx(
-              "group/pin relative flex items-center justify-center rounded",
+              "arc-pinned-site group/pin relative flex items-center justify-center rounded",
               isDragging ? "cursor-grabbing opacity-50" : "cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700",
               // Active state: ring only (dot indicator added separately below)
               isActive && !isDragging && "ring-2 ring-cyan-500 dark:ring-cyan-400"
@@ -362,6 +369,11 @@ export const PinnedIcon = ({
               </>
             )}
             <ContextMenu.Separator />
+            {onAiRename && (
+              <ContextMenu.Item onSelect={onAiRename}>
+                <Sparkles size={14} className="mr-2" /> AI Rename
+              </ContextMenu.Item>
+            )}
             <ContextMenu.Item onSelect={handleEdit}>
               <Pencil size={14} className="mr-2" /> Edit
             </ContextMenu.Item>
@@ -425,22 +437,24 @@ export const PinnedIcon = ({
           </div>
 
           {/* Icon and Color picker */}
-          <IconColorPicker
-            selectedIcon={editCustomIconName}
-            selectedColor={editIconColor}
-            currentIconPreview={currentIconPreview}
-            onIconSelect={handleSelectIcon}
-            onColorSelect={handleColorChange}
-            colorOptions={PINNED_SITE_COLORS}
-            showCustomHex
-            customHexValue={customHexInput}
-            onCustomHexChange={setCustomHexInput}
-            onCustomHexSubmit={handleCustomHexSubmit}
-            currentCustomColor={editIconColor}
-            iconHeaderAction={resetIconButton}
-            selectedEmoji={editEmoji}
-            onEmojiSelect={handleEmojiSelect}
-          />
+          <Suspense fallback={<div className="h-32" />}>
+            <IconColorPicker
+              selectedIcon={editCustomIconName}
+              selectedColor={editIconColor}
+              currentIconPreview={currentIconPreview}
+              onIconSelect={handleSelectIcon}
+              onColorSelect={handleColorChange}
+              colorOptions={PINNED_SITE_COLORS}
+              showCustomHex
+              customHexValue={customHexInput}
+              onCustomHexChange={setCustomHexInput}
+              onCustomHexSubmit={handleCustomHexSubmit}
+              currentCustomColor={editIconColor}
+              iconHeaderAction={resetIconButton}
+              selectedEmoji={editEmoji}
+              onEmojiSelect={handleEmojiSelect}
+            />
+          </Suspense>
         </div>
       </Dialog>
     </>

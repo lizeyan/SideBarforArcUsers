@@ -1,24 +1,62 @@
-# ChromeSideBar
+# Side Bar for Arc Users — Arc Style
 
-A Chrome extension that puts pinned sites, bookmarks, and tabs in a side panel, similar to the Arc browser's experience.
+An independently maintained Chrome extension with one primary goal: make tab management in Chrome feel as close to Arc as the Chrome extension platform allows.
 
-**Link to Chrome Web Store:**
-https://chromewebstore.google.com/detail/jmmgjadgeeicdbagekohgmaipoekgcbn?utm_source=item-share-cb
+Arc is the product and interaction reference for this fork. Visual density, Favorites, pinned pages, Spaces, active-tab treatment, menus, persistence, and tab-group behavior are intentionally evaluated against Arc rather than treated as loosely inspired features.
+
+Chrome still owns the browser frame, address bar, native horizontal tab strip, and Side Panel title bar, so an extension cannot reproduce those surfaces. Everything rendered inside the extension's Side Panel is designed to minimize the remaining difference.
 
 **What it does:**
-- **Unified sidebar:** Pinned bookmarks, regular bookmarks, and active tabs all in one vertical panel
+- **Arc-style sidebar:** Favorites, pinned pages, folders, and unpinned tabs in one vertical panel
+- **Focused Spaces:** View one Space at a time, with no aggregate "All" Space
+- **Persistent pages:** Pinned bookmark pages keep their position and reopen like Arc pinned tabs
+- **Chrome synchronization:** Spaces map to native Chrome tab groups, including activation and move handling
 - **Tab history:** Navigate back/forward through recently used tabs
-- **"Live" bookmarks:** Bookmarks behave like tabs—open and close them on the fly
+- **Arc-like menus:** Single- and multi-selection actions follow Arc where Chrome APIs permit
 - **Backup/Restore:** Export and import everything to JSON
-- **Tab groups:** Create and organize tabs within groups (a native Chrome feature)
 - **Drag & drop:** Reorganize bookmarks, folders, tabs, and groups easily
 - **Filter & search:** Find items by text, filter by live tabs or playing audio
+- **Optional AI naming:** Rename Favorites and pinned bookmark pages through an OpenAI-compatible API
 
 ## Background
 
 I've been using Arc Browser for a while. When Arc paused development, I started looking at Chrome and other Chromium-based browsers. The one thing I really missed was Arc's sidebar—how it puts favorite sites, pinned pages, and tabs all in one vertical list.
 
-So I vibe-coded this extension to bring that to Chrome.
+This fork continues that idea as a separate extension, with Arc parity as an explicit product direction rather than an occasional styling goal.
+
+## Core Goal: Stay as Close to Arc as Possible
+
+When a behavior can be implemented safely with Chrome APIs, this fork prefers Arc's behavior and terminology:
+
+- Favorites remain available across Spaces.
+- Pinned pages are backed by bookmarks so their position survives closing the live tab.
+- Unpinned tabs belong to the current Space and stay synchronized with its native Chrome tab group.
+- Only one Space is visible at a time; the upstream aggregate `All` view is intentionally removed.
+- Collapsed folders can still expose the currently active pinned page, matching Arc's location cue.
+- Active rows, spacing, translucency, typography, icons, bottom Space navigation, and context menus are tuned against Arc screenshots.
+
+Platform limitations are documented rather than hidden. Features that require control over Chrome's native window chrome—such as replacing the horizontal tab strip or styling the Side Panel host header—are outside an extension's control.
+
+## Differences from Upstream
+
+This repository is a standalone fork of [monemone-org/ChromeSideBar](https://github.com/monemone-org/ChromeSideBar). It is maintained independently and is not intended to be merged back upstream.
+
+The following differences describe this fork relative to the upstream version it was based on:
+
+| Area | This fork |
+| --- | --- |
+| Product direction | Arc fidelity is the primary goal for interaction, terminology, layout, and visual treatment. |
+| Extension identity | Uses the `Side Bar for Arc Users — Arc Style` name and is packaged as a separate extension. |
+| Spaces | Removes the visible `All` Space. The sidebar, swipe navigation, and Space Navigator show one real Space at a time. Legacy `all` state migrates to the first real Space. |
+| Native tab groups | A Space is kept in sync with its Chrome tab group. New and legacy ungrouped tabs are assigned to the active Space when appropriate. |
+| Pinned-page persistence | Bookmark/Favorite-to-tab associations use session state plus a local recovery backup, so closing and reopening the Side Panel does not duplicate pinned pages in the Tabs section. |
+| Arc-style tree behavior | Clicking a folder row expands or collapses it. A collapsed folder can surface its active pinned descendant as a single inset card. |
+| Context menus | Pinned-page single and multi-selection menus follow Arc's supported actions, including `New Folder with N Items`, move, duplicate, mute, share, and remove-pin behavior. Unsupported Arc-only features such as Split View and Customize Page are deliberately omitted. |
+| Visual system | Adds Arc-oriented colors, translucency, row geometry, Favorites grid, active-page cards, folder icons, spacing, and bottom Space navigation. |
+| Startup performance | Shares bookmark/tab subscriptions, restores associations concurrently, lazy-loads secondary dialogs, and includes Performance Timeline marks for cold-start diagnosis. |
+| AI naming | Adds optional manual or automatic naming for Favorites and bookmark-backed pinned pages through configurable OpenAI-compatible Responses or Chat Completions APIs. |
+
+The upstream remote is retained for reference and attribution, but releases from this repository are made from this fork's own `main` branch.
 
 ## Features
 
@@ -64,9 +102,9 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 
 ### Active Tabs
 
-- Display all tabs in the current window
+- Display unpinned tabs that belong to the current Space
 - Audio indicator (speaker icon) for tabs playing audio
-- Auto-scroll to active tab when switching
+- Follow Chrome's active tab and switch Spaces according to the configured follow mode
 - Reorder tabs via drag-and-drop
 - Click to switch to tab
 - Close tab via X button on hover
@@ -104,10 +142,11 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 Organize your browsing by context with Arc-style Spaces—isolated workspaces that filter the sidebar to show only relevant bookmarks and tabs.
 
 - **What is a Space?** A Space links a bookmark folder to a Chrome tab group with a name, icon, and color
-- **"All" Space**: Built-in space that shows all bookmarks and tabs (no filtering)
+- **One Space at a time**: There is no aggregate `All` Space; the sidebar always shows one real Space
+- **Legacy migration**: Older `all` or deleted Space state automatically resolves to the first available real Space
 - **SpaceBar**: Horizontal row of space icons at the bottom of the panel
   - Click to switch spaces
-  - Active space shows with a ring indicator
+  - Active Space uses Arc-style visual treatment
   - Swipe left/right to switch spaces
 - **Creating Spaces**:
   - Click "+" in the SpaceBar
@@ -116,6 +155,7 @@ Organize your browsing by context with Arc-style Spaces—isolated workspaces th
 - **Filtering**:
   - Active space shows only its bookmark folder and Chrome tab group
   - New tabs (Cmd+T) automatically join the active space's group
+  - Legacy ungrouped tabs join the current Space when first activated
   - Tab operations (Close All, Sort) only affect the current space's tabs
 - **Chrome Tab Group Integration**:
   - Each Space links to a Chrome tab group by matching names
@@ -124,6 +164,7 @@ Organize your browsing by context with Arc-style Spaces—isolated workspaces th
 - **Context menu** (right-click space icon):
   - Edit (name, icon, color, bookmark folder)
   - Delete (with confirmation)
+- **Last Space protection**: The final remaining Space cannot be deleted; use `+` to create additional Spaces
 - **Multi-window**: Each window has independent Space ↔ group mappings
 - **One folder, one Space**: a bookmark folder is assumed to belong to at most one Space. Picking the same folder for two Spaces is not blocked, but is unsupported - the extension resolves a bookmark to its Space by folder, so a shared folder resolves to whichever Space is found first.
 
@@ -157,10 +198,12 @@ Gear icon in the bottom-left corner:
 - **Pinned icon size**: 12-48px (default: 22px)
 - **Open bookmark**: Choose how bookmarks open
   - Arc style: Bookmarks act as persistent tabs (hidden from Tabs section)
-    - Note: Tab associations are session-only. When Chrome restarts, bookmarks/pins show as unloaded and can be re-clicked to open.
+    - Associations are stored in session state and recovered from a local backup when matching real tabs still exist.
   - In new tab: Opens bookmark in a new background tab
   - In active tab: Replaces the current tab with the bookmark
-- **Sort tab groups first**: When sorting tabs, keep tab groups at the top
+- **Follow active tab**: Switch Space, switch and scroll, or keep the sidebar fixed
+- **Space color**: Optionally tint the sidebar with the active Space color
+- **AI naming**: Configure an OpenAI-compatible endpoint, model, protocol, prompt, and automatic naming behavior
 
 ### General
 
@@ -176,10 +219,12 @@ Gear icon in the bottom-left corner:
 - `sidePanel`, `bookmarks`, `tabs`, `tabGroups`: Core features
 - `storage`: Save your settings locally
 - `favicon`: Show website icons
+- `scripting`: Read page content only when requested for AI-assisted naming
+- Optional `http://*/*` and `https://*/*` host access: Requested explicitly for page reading or the configured AI endpoint
 
 ## Full Changelog
 
-[changelog.md](https://github.com/monemone-org/ChromeSideBar/blob/main/docs/changelog.md)
+[docs/changelog.md](docs/changelog.md)
 
 ## Tech Stack
 
@@ -237,14 +282,8 @@ Outputs production build to `dist/` folder.
 3. Click **Load unpacked** and select the `dist/` folder
 4. Click the extension icon or hit `Cmd+Shift+E` to open the sidebar
 
-Or Install via Chrome Extension Store
+## Upstream and Attribution
 
-https://chromewebstore.google.com/detail/jmmgjadgeeicdbagekohgmaipoekgcbn?utm_source=item-share-cb
+This fork is based on [monemone-org/ChromeSideBar](https://github.com/monemone-org/ChromeSideBar). Thanks to the upstream project for the original extension architecture and feature foundation.
 
-## Support Me
-
-This is a free, open-source hobby project. If you find it useful, consider sponsoring me on GitHub:
-
-[❤️ Sponsor on GitHub](https://github.com/sponsors/monehsieh)
-
-Thanks for the support!
+Install this fork from a release produced by this repository, or build it locally using the instructions above. The upstream Chrome Web Store listing installs the upstream extension, not this Arc-focused fork.

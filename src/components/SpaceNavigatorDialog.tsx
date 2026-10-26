@@ -10,7 +10,6 @@ export interface SpaceNavigatorDialogProps
   onClose: () => void;
   // Optional customization
   title?: string;
-  hideAllSpace?: boolean;
   excludeSpaceId?: string;
   requireBookmarkFolder?: boolean;
   // Return error message string to keep dialog open and show error, or void/undefined to close
@@ -22,14 +21,13 @@ export const SpaceNavigatorDialog = ({
   isOpen,
   onClose,
   title = 'Navigate to Space',
-  hideAllSpace = false,
   excludeSpaceId,
   requireBookmarkFolder = false,
   onSelectSpace,
   showCurrentIndicator = true
 }: SpaceNavigatorDialogProps) =>
 {
-  const { allSpaces, spaces, switchToSpace, activeSpaceId } = useSpacesContext();
+  const { spaces, switchToSpace, activeSpaceId } = useSpacesContext();
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -37,13 +35,13 @@ export const SpaceNavigatorDialog = ({
   // Filter spaces based on options
   const filteredSpaces = useMemo(() =>
   {
-    let result = hideAllSpace ? spaces : allSpaces;
+    let result = spaces;
     if (excludeSpaceId)
     {
       result = result.filter(s => s.id !== excludeSpaceId);
     }
     return result;
-  }, [allSpaces, spaces, hideAllSpace, excludeSpaceId]);
+  }, [spaces, excludeSpaceId]);
 
   const isItemDisabled = useCallback((space: Space) =>
     requireBookmarkFolder && !space.bookmarkFolderPath,

@@ -38,7 +38,7 @@ import { FollowActiveTabMode } from '../../../utils/followActiveTab';
 import { TestCase } from '../types';
 import { createTestBookmark, createTestBookmarkInFolder, createTestPinnedSite, createTestSpace, createTestSubfolder, TEST_AUDIO_URL, TEST_SPACE_VIDEO_NAME, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
 import { activateTabNative, audioQuickJump, closeTab, navigateTabHistory, openBookmarkTab, openFillerBookmarksUntilScrollable, openFillerTabsUntilScrollable, openPinnedTab, openRegularTab, pause, scrollRowOutOfView, selectAudioTabFromDropdown, selectTabFromHistoryDropdown, setFollowActiveTabMode, showActiveTab, switchSpaceVerified } from '../actions';
-import { assertAudioListIncludes, assertBookmarkRowExists, assertCommandShortcutBound, assertSidebarShowsSpace, assertTabActive, assertTabAudible, assertTabRowVisible } from '../assertions';
+import { assertAudioListIncludes, assertBookmarkRowExists, assertCommandShortcutBound, assertSidebarShowsSpace, assertTabActive, assertTabAudible, assertTabInSpace, assertTabRowVisible } from '../assertions';
 
 const MODES: FollowActiveTabMode[] = ['off', 'space', 'space-and-scroll'];
 
@@ -298,16 +298,9 @@ function makeC1eCase(mode: FollowActiveTabMode): TestCase
   };
 }
 
-// Doc's own expectation: NO switch in any mode, since pinned tabs are
-// space-agnostic. Confirmed directly in background.ts's getSpaceForTab():
-// `if (await isPinnedManagedTab(windowId, tabId)) return undefined;` -
-// destinationSpaceId is always undefined for a pinned tab, so the
-// space-switch gate never fires regardless of mode. No scroll assertion
-// here (unlike C.1a-e): PinnedBar.tsx renders pinned-site rows with neither
-// data-tab-id nor data-bookmark-id, and a pinned tab's live tab is excluded
-// from TabList's own rows entirely (BookmarkTabsContext.getManagedTabIds()
-// filters it out) - there's no scrollable DOM target for this case to check
-// in the first place, and the doc itself never claims scroll behavior here.
+// Favorite 的真实 Tab 现在属于打开时的 Space 原生组；原生激活时应和书签
+// 固定 Tab 一样遵循 Follow Active Tab。PinnedBar 没有可滚动的行目标，
+// 所以这里仍只验证 Space 切换，不验证滚动。
 function makeC1fCase(mode: FollowActiveTabMode): TestCase
 {
   return {
@@ -323,6 +316,7 @@ function makeC1fCase(mode: FollowActiveTabMode): TestCase
       setFollowActiveTabMode('off'),
       ...switchSpaceVerified('spaceA'),
       openPinnedTab({ pinRef: 'pin', url: testUrl('c1f-pin'), tabRef: 'pinTab' }),
+      assertTabInSpace('pinTab', 'spaceA'),
       ...switchSpaceVerified('spaceB'),
       openRegularTab({ url: testUrl('c1f-tabB'), spaceRef: 'spaceB', tabRef: 'tabB' }),
       activateTabNative('tabB'),
@@ -331,7 +325,9 @@ function makeC1fCase(mode: FollowActiveTabMode): TestCase
       // The actual step under test: native-activate the pinned tab from Chrome's tab strip.
       setFollowActiveTabMode(mode),
       activateTabNative('pinTab'),
-      assertSidebarShowsSpace('spaceB'),
+      ...(mode === 'off'
+        ? [assertSidebarShowsSpace('spaceB')]
+        : [assertSidebarShowsSpace('spaceA')]),
     ],
   };
 }

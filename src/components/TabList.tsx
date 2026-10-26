@@ -48,6 +48,7 @@ import { Globe, Volume2, Pin, Plus, X, ArrowDownAZ, ArrowDownZA, Edit, Palette, 
 import { SectionHeader } from './SectionHeader';
 import { getIndentPadding } from '../utils/indent';
 import { matchesFilter } from '../utils/searchParser';
+import { filterUnmanagedTabs } from '../utils/tabVisibility';
 import { moveSingleTab, moveTabAfter } from '../utils/tabMove';
 import { moveSingleGroup, moveGroupAfter } from '../utils/groupMove';
 import { DropIndicators } from './DropIndicators';
@@ -81,7 +82,7 @@ interface DraggableTabProps {
   onClose: (id: number) => void;
   onActivate: (id: number) => void;
   onDuplicate?: (id: number) => void;
-  onPin?: (url: string, title: string, faviconUrl?: string) => void;
+  onPin?: (url: string, title: string, faviconUrl?: string, tabId?: number) => void;
   onOpenAddToGroupDialog?: (tabId: number, currentGroupId?: number) => void;
   onOpenMoveToSpaceDialog?: (tabId: number, currentSpaceId?: string) => void;
   onAddToBookmark?: (tab: chrome.tabs.Tab) => void;
@@ -157,7 +158,7 @@ const TabRow = forwardRef<HTMLDivElement, DraggableTabProps>(({
           onClick={(e) =>
           {
             e.stopPropagation();
-            onPin(tab.url!, tab.title || tab.url!, tab.favIconUrl);
+            onPin(tab.url!, tab.title || tab.url!, tab.favIconUrl, tab.id);
           }}
           className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 active:bg-gray-300 dark:active:bg-gray-500 rounded"
           title="Pin"
@@ -266,7 +267,7 @@ const TabRow = forwardRef<HTMLDivElement, DraggableTabProps>(({
             // Multi-selection menu
             <>
               {hasSelectedTabs && onPin && (
-                <ContextMenu.Item onSelect={() => onPin(tab.url || '', tab.title || tab.url || '', tab.favIconUrl)}>
+                <ContextMenu.Item onSelect={() => onPin(tab.url || '', tab.title || tab.url || '', tab.favIconUrl, tab.id)}>
                   <Pin size={14} className="mr-2" /> Pin to Sidebar
                 </ContextMenu.Item>
               )}
@@ -302,7 +303,7 @@ const TabRow = forwardRef<HTMLDivElement, DraggableTabProps>(({
             // Single-item menu
             <>
           {onPin && tab.url && !tab.pinned && (
-            <ContextMenu.Item onSelect={() => onPin(tab.url!, tab.title || tab.url!, tab.favIconUrl)}>
+            <ContextMenu.Item onSelect={() => onPin(tab.url!, tab.title || tab.url!, tab.favIconUrl, tab.id)}>
               <Pin size={14} className="mr-2" /> Pin to Sidebar
             </ContextMenu.Item>
           )}
@@ -775,7 +776,7 @@ type DisplayItem =
   | { type: 'tab'; tab: chrome.tabs.Tab };
 
 interface TabListProps {
-  onPin?: (url: string, title: string, faviconUrl?: string) => void;
+  onPin?: (url: string, title: string, faviconUrl?: string, tabId?: number) => void;
   onPinMultiple?: (pins: Array<{ url: string; title: string; faviconUrl?: string }>) => void;
   tabGroupDisplayOrder?: TabGroupDisplayOrder;
   onTabGroupDisplayOrderChange?: (order: TabGroupDisplayOrder) => void;
@@ -787,9 +788,10 @@ interface TabListProps {
   useSpaces?: boolean;  // When true, show "Add to Space" menu; when false, show "Add to Group" menu
   onSpaceDropTargetChange?: (spaceId: string | null) => void;
   onPerformAction?: (action: UndoableAction) => Promise<void>;
+  onBookmarkCreated?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
 }
 
-export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFirst', onTabGroupDisplayOrderChange, onExternalDropTargetChange: _onExternalDropTargetChange, resolveBookmarkDropTarget: _resolveBookmarkDropTarget, arcStyleEnabled = false, filterText = '', activeSpace: activeSpaceProp, useSpaces = true, onSpaceDropTargetChange: _onSpaceDropTargetChange, onPerformAction }: TabListProps) =>
+export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFirst', onTabGroupDisplayOrderChange, onExternalDropTargetChange: _onExternalDropTargetChange, resolveBookmarkDropTarget: _resolveBookmarkDropTarget, arcStyleEnabled = false, filterText = '', activeSpace: activeSpaceProp, useSpaces = true, onSpaceDropTargetChange: _onSpaceDropTargetChange, onPerformAction, onBookmarkCreated }: TabListProps) =>
 {
   const { spaces, activeSpace: activeSpaceFromContext, windowId } = useSpacesContext();
   const { tabs, closeTabs, activateTab, moveTab, groupTab, ungroupTab, createGroupWithTab, createTabInGroup, createTab, duplicateTab, sortTabs, sortGroupTabs, error } = useTabs(windowId ?? undefined);
@@ -807,7 +809,7 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
   const visibleTabs = useMemo(() =>
   {
     const managedTabIds = getManagedTabIds();
-    let filtered = tabs.filter(tab => !managedTabIds.has(tab.id!));
+    let filtered = filterUnmanagedTabs(tabs, managedTabIds);
 
     // Space filter: when in a space, show tabs in Chrome group matching Space name
     if (isInSpace && activeSpace)
@@ -1087,10 +1089,15 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
       await associateExistingTab(tab.id, newBookmark.id, targetSpace?.id);
     }
 
+    if (newBookmark)
+    {
+      onBookmarkCreated?.(newBookmark, tab.id);
+    }
+
     saveLastSelectedBookmarkFolder(folderId);
     closeAddToBookmarkDialog();
   }, [addToBookmarkDialog.tab, createBookmark, arcStyleEnabled, associateExistingTab, saveLastSelectedBookmarkFolder,
-    closeAddToBookmarkDialog, findSpaceForFolder]);
+    closeAddToBookmarkDialog, findSpaceForFolder, onBookmarkCreated]);
 
   const [exportConflictDialog, setExportConflictDialog] = useState<{
     isOpen: boolean;
@@ -1964,11 +1971,11 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
             const itemKey = getItemKeyForTab(item.tabId);
             if (itemKey?.startsWith('bookmark-'))
             {
-              deassociateBookmarkTab(itemKey.replace('bookmark-', ''));
+              await deassociateBookmarkTab(itemKey.replace('bookmark-', ''));
             }
             else if (itemKey?.startsWith('pinned-'))
             {
-              deassociatePinnedTab(itemKey.replace('pinned-', ''));
+              await deassociatePinnedTab(itemKey.replace('pinned-', ''));
             }
             allTabIds.push(item.tabId);
           }
@@ -2215,7 +2222,8 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
   const handlePinSelectedTabs = useCallback((
     clickedUrl: string,
     clickedTitle: string,
-    clickedFaviconUrl?: string
+    clickedFaviconUrl?: string,
+    clickedTabId?: number
   ) =>
   {
     if (!onPin) return;
@@ -2240,7 +2248,7 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
     else
     {
       // Single tab - pin directly
-      onPin(clickedUrl, clickedTitle, clickedFaviconUrl);
+      onPin(clickedUrl, clickedTitle, clickedFaviconUrl, clickedTabId);
     }
   }, [onPin, onPinMultiple, getSelectedItems, visibleTabs, clearSelection]);
 
@@ -2302,7 +2310,8 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
     {
       if (tab.url && tab.title)
       {
-        await createBookmark(folderId, tab.title, tab.url);
+        const { node } = await createBookmark(folderId, tab.title, tab.url);
+        if (node) onBookmarkCreated?.(node, tab.id);
       }
     }
 
@@ -2317,7 +2326,8 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
         {
           if (tab.url && tab.title)
           {
-            await createBookmark(newFolder.id, tab.title, tab.url);
+            const { node } = await createBookmark(newFolder.id, tab.title, tab.url);
+            if (node) onBookmarkCreated?.(node, tab.id);
           }
         }
       });
@@ -2327,7 +2337,7 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
     clearSelection();
     setAddToBookmarkMultiDialog({ isOpen: false });
     showToast('Added to bookmarks');
-  }, [getTabSelectionInfo, visibleTabs, createBookmark, createFolder, saveLastSelectedBookmarkFolder, clearSelection, showToast]);
+  }, [getTabSelectionInfo, visibleTabs, createBookmark, createFolder, saveLastSelectedBookmarkFolder, clearSelection, showToast, onBookmarkCreated]);
 
   // Open move to space dialog for multi-selection
   const openMoveSelectedToSpaceDialog = useCallback(() =>
@@ -2490,6 +2500,7 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
         label="Tabs"
         menuContent={tabsMenuContent}
         menuTitle="Tab options"
+        className="arc-tabs-title"
       />
 
       {/* Tabs list */}
@@ -2732,7 +2743,6 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
         isOpen={moveToSpaceDialog.isOpen}
         onClose={closeMoveToSpaceDialog}
         title="Move Tab to Space"
-        hideAllSpace
         excludeSpaceId={moveToSpaceDialog.currentSpaceId}
         onSelectSpace={handleMoveToSpace}
         showCurrentIndicator={false}
@@ -2752,20 +2762,24 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
         onClose={closeRenameGroupDialog}
       />
 
-      <FolderPickerDialog
-        isOpen={folderPickerDialog.isOpen}
-        title="Select Destination Folder"
-        onSelect={handleFolderSelected}
-        onClose={closeFolderPickerDialog}
-      />
+      {folderPickerDialog.isOpen && (
+        <FolderPickerDialog
+          isOpen
+          title="Select Destination Folder"
+          onSelect={handleFolderSelected}
+          onClose={closeFolderPickerDialog}
+        />
+      )}
 
-      <FolderPickerDialog
-        isOpen={addToBookmarkDialog.isOpen}
-        title="Add Tab to Bookmark Folder"
-        onSelect={handleAddToBookmarkFolderSelect}
-        onClose={closeAddToBookmarkDialog}
-        defaultFolderId={lastSelectedBookmarkFolderDefaultId}
-      />
+      {addToBookmarkDialog.isOpen && (
+        <FolderPickerDialog
+          isOpen
+          title="Add Tab to Bookmark Folder"
+          onSelect={handleAddToBookmarkFolderSelect}
+          onClose={closeAddToBookmarkDialog}
+          defaultFolderId={lastSelectedBookmarkFolderDefaultId}
+        />
+      )}
 
       <ExportConflictDialog
         isOpen={exportConflictDialog.isOpen}
@@ -2784,31 +2798,34 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
       />
 
       {/* Multi-selection dialogs */}
-      <FolderPickerDialog
-        isOpen={addToBookmarkMultiDialog.isOpen}
-        title="Add to Bookmark Folder"
-        onSelect={handleAddSelectedToBookmarkFolder}
-        onClose={() => setAddToBookmarkMultiDialog({ isOpen: false })}
-        defaultFolderId={lastSelectedBookmarkFolderDefaultId}
-      />
+      {addToBookmarkMultiDialog.isOpen && (
+        <FolderPickerDialog
+          isOpen
+          title="Add to Bookmark Folder"
+          onSelect={handleAddSelectedToBookmarkFolder}
+          onClose={() => setAddToBookmarkMultiDialog({ isOpen: false })}
+          defaultFolderId={lastSelectedBookmarkFolderDefaultId}
+        />
+      )}
 
       <SpaceNavigatorDialog
         isOpen={moveToSpaceMultiDialog.isOpen}
         onClose={() => setMoveToSpaceMultiDialog({ isOpen: false })}
         title="Move Tabs to Space"
-        hideAllSpace
         excludeSpaceId={activeSpace?.id}
         onSelectSpace={handleMoveSelectedToSpace}
         showCurrentIndicator={false}
       />
 
-      <FolderPickerDialog
-        isOpen={saveGroupsToBookmarksDialog.isOpen}
-        title="Save Groups to Bookmark Folder"
-        onSelect={handleSaveGroupsToBookmarksFolder}
-        onClose={() => setSaveGroupsToBookmarksDialog({ isOpen: false })}
-        defaultFolderId={lastSelectedBookmarkFolderDefaultId}
-      />
+      {saveGroupsToBookmarksDialog.isOpen && (
+        <FolderPickerDialog
+          isOpen
+          title="Save Groups to Bookmark Folder"
+          onSelect={handleSaveGroupsToBookmarksFolder}
+          onClose={() => setSaveGroupsToBookmarksDialog({ isOpen: false })}
+          defaultFolderId={lastSelectedBookmarkFolderDefaultId}
+        />
+      )}
 
       <Toast
         message={toastState.message}

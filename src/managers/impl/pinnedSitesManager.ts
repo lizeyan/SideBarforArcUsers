@@ -28,6 +28,7 @@ import {
   applyMovePin,
   applyRemovePins,
   applyResetFavicon,
+  applyRenamePinIfUnchanged,
   applySetFavicons,
   applyUpdatePin,
 } from '../shared/pinnedSitesApi';
@@ -63,6 +64,15 @@ export class PinnedSitesManager implements RoutedManager, PinnedSitesApi
 
       case 'updatePin':
         return this.updatePin(message.id as string, message.edit as PinnedSiteEdit, originId);
+
+      case 'renamePinIfUnchanged':
+        return this.renamePinIfUnchanged(
+          message.id as string,
+          message.expectedTitle as string,
+          message.expectedUrl as string,
+          message.newTitle as string,
+          originId
+        );
 
       case 'resetFavicon':
         return this.resetFavicon(message.id as string, message.favicon as string | undefined, originId);
@@ -123,6 +133,20 @@ export class PinnedSitesManager implements RoutedManager, PinnedSitesApi
   updatePin(id: string, edit: PinnedSiteEdit, originId?: string): PinnedSite[]
   {
     return this.#commit(applyUpdatePin(this.#sites, id, edit), originId);
+  }
+
+  renamePinIfUnchanged(
+    id: string,
+    expectedTitle: string,
+    expectedUrl: string,
+    newTitle: string,
+    originId?: string
+  ): PinnedSite[]
+  {
+    return this.#commit(
+      applyRenamePinIfUnchanged(this.#sites, id, expectedTitle, expectedUrl, newTitle),
+      originId
+    );
   }
 
   resetFavicon(id: string, favicon?: string, originId?: string): PinnedSite[]

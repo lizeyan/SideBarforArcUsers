@@ -3,6 +3,7 @@ import { getIconUrl } from '../utils/iconify';
 import { isEmoji } from '../utils/emoji';
 import { GROUP_COLORS, getHexColorStyle } from '../utils/groupColors';
 import { Space } from '../contexts/SpacesContext';
+import clsx from 'clsx';
 
 // Renders the space icon overlay badge (emoji or Lucide icon on colored circle)
 const SpaceIconOverlay = ({
@@ -47,12 +48,20 @@ const SpaceIconOverlay = ({
   );
 };
 
-// Folder icon with optional space overlay badge
-export const SpaceFolderIcon = ({ space }: { space: Space | undefined }) =>
+/**
+ * 渲染书签文件夹图标；Space 根文件夹会保留原有颜色和角标。
+ */
+export const SpaceFolderIcon = ({
+  space,
+  size = 16,
+}: {
+  space: Space | undefined;
+  size?: number;
+}) =>
 {
   if (!space)
   {
-    return <Folder size={16} className="text-gray-500" />;
+    return <Folder size={size} className="arc-folder-icon text-gray-500" />;
   }
 
   const colorStyle = GROUP_COLORS[space.color];
@@ -62,8 +71,8 @@ export const SpaceFolderIcon = ({ space }: { space: Space | undefined }) =>
   return (
     <div className="relative">
       <Folder
-        size={16}
-        className={colorClass}
+        size={size}
+        className={clsx('arc-folder-icon', colorClass)}
         style={hexStyle ? { color: hexStyle.text } : undefined}
       />
       <span className="absolute -bottom-[5px] -right-[5px] flex items-center justify-center">

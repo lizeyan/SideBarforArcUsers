@@ -1,16 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
 import { BookmarkTree } from './components/BookmarkTree';
 import { TabList, ExternalDropTarget, ResolveBookmarkDropTarget } from './components/TabList';
 import { PinnedBar } from './components/PinnedBar';
 import { Toolbar } from './components/Toolbar';
 import { SpaceBar } from './components/SpaceBar';
-import { SettingsDialog, SettingsValues, BookmarkOpenMode, TabGroupDisplayOrder } from './components/SettingsDialog';
-import { AboutDialog } from './components/AboutDialog';
-import { ExportDialog } from './components/ExportDialog';
-import { ImportDialog } from './components/ImportDialog';
-import { ArcImportDialog } from './components/ArcImportDialog';
-import { WelcomeDialog } from './components/WelcomeDialog';
-import { WhatsNewDialog } from './components/WhatsNewDialog';
+import type { SettingsValues, BookmarkOpenMode, TabGroupDisplayOrder } from './components/SettingsDialog';
 import { getWhatsNewSince, getRecentWhatsNew, ChangelogGroup } from './data/changelog';
 import { AudioTabsDropdown } from './components/AudioTabsDropdown';
 import { Toast } from './components/Toast';
@@ -34,7 +28,7 @@ import { useFontSize } from './contexts/FontSizeContext';
 import { getIconUrl } from './utils/iconify';
 import { isEmoji } from './utils/emoji';
 import { GROUP_COLORS, getSpaceBgColor } from './utils/groupColors';
-import { Settings, Info, Upload, Download, RefreshCw, LayoutGrid, Undo2, Sparkles, Newspaper, Mail, Heart } from 'lucide-react';
+import { Settings, Info, Upload, Download, RefreshCw, Undo2, Sparkles, Newspaper, Mail, Heart } from 'lucide-react';
 import { SectionHeader } from './components/SectionHeader';
 import { SpaceContextMenuContent } from './components/SpaceContextMenuContent';
 import { useNewsCheck } from './hooks/useNewsCheck';
@@ -42,6 +36,15 @@ import { lastAudibleTrackerProxy } from './managers/proxies/lastAudibleTrackerPr
 import { useFollowActiveTab } from './hooks/useFollowActiveTab';
 import { FollowActiveTabMode, FOLLOW_ACTIVE_TAB_KEY, DEFAULT_FOLLOW_ACTIVE_TAB_MODE, parseFollowActiveTabMode } from './utils/followActiveTab';
 import * as DropdownMenu from './components/menu/DropdownMenu';
+import {
+  AI_SETTINGS_STORAGE_KEY,
+  AiRenameSettings,
+  DEFAULT_AI_RENAME_SETTINGS,
+  getHostPermissionPattern,
+  parseAiRenameSettings,
+} from './utils/aiConfig';
+import { OpenAiCompatibleClient } from './services/aiRenameService';
+import { resolveVersionDialogState } from './utils/versionDialogState';
 
 // DEV-only, code-split so it never ends up in a production bundle - see
 // src/tests/inpanel/TestRunnerPanel.tsx. Lazy (not the dynamic-import-on-click
@@ -56,10 +59,19 @@ const TestRunnerPanel = import.meta.env.DEV
   ? React.lazy(() => import('./tests/inpanel/TestRunnerPanel').then(m => ({ default: m.TestRunnerPanel })))
   : null;
 
+// 首屏不需要的对话框按需加载，避免把设置、导入和 emoji 数据放进冷启动路径。
+const SettingsDialog = React.lazy(() => import('./components/SettingsDialog').then(m => ({ default: m.SettingsDialog })));
+const AboutDialog = React.lazy(() => import('./components/AboutDialog').then(m => ({ default: m.AboutDialog })));
+const ExportDialog = React.lazy(() => import('./components/ExportDialog').then(m => ({ default: m.ExportDialog })));
+const ImportDialog = React.lazy(() => import('./components/ImportDialog').then(m => ({ default: m.ImportDialog })));
+const ArcImportDialog = React.lazy(() => import('./components/ArcImportDialog').then(m => ({ default: m.ArcImportDialog })));
+const WelcomeDialog = React.lazy(() => import('./components/WelcomeDialog').then(m => ({ default: m.WelcomeDialog })));
+const WhatsNewDialog = React.lazy(() => import('./components/WhatsNewDialog').then(m => ({ default: m.WhatsNewDialog })));
+
 // Inner component that renders content for a single space
 interface SidebarContentProps
 {
-  onPin: (url: string, title: string, faviconUrl?: string) => void;
+  onPin: (url: string, title: string, faviconUrl?: string, tabId?: number) => void;
   onPinMultiple: (pins: Array<{ url: string; title: string; faviconUrl?: string }>) => void;
   hideOtherBookmarks: boolean;
   externalDropTarget: ExternalDropTarget | null;
@@ -70,12 +82,13 @@ interface SidebarContentProps
   filterText: string;
   tabGroupDisplayOrder: TabGroupDisplayOrder;
   onTabGroupDisplayOrderChange: (order: TabGroupDisplayOrder) => void;
-  useSpaces: boolean;
   onExternalDropTargetChange: (target: ExternalDropTarget | null) => void;
   resolveBookmarkDropTarget: () => ResolveBookmarkDropTarget | null;
   onShowToast?: (message: string) => void;
   onPerformAction?: (action: UndoableAction) => Promise<void>;
   onSpaceDropTargetChange?: (spaceId: string | null) => void;
+  onAiRenameBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
+  onBookmarkCreated?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
 }
 
 // Storage key for scroll position per space per window
@@ -94,15 +107,16 @@ const SidebarContent: React.FC<SidebarContentProps> = ({
   filterText,
   tabGroupDisplayOrder,
   onTabGroupDisplayOrderChange,
-  useSpaces,
   onExternalDropTargetChange,
   resolveBookmarkDropTarget,
   onShowToast,
   onPerformAction,
   onSpaceDropTargetChange,
+  onAiRenameBookmark,
+  onBookmarkCreated,
 }) =>
 {
-  const { activeSpace, activeSpaceId, windowId, getSpaceSwitchSource } = useSpacesContext();
+  const { spaces, activeSpace, activeSpaceId, windowId, getSpaceSwitchSource } = useSpacesContext();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastScrollTopRef = useRef(0);
   const prevSpaceIdRef = useRef(activeSpaceId);
@@ -176,6 +190,15 @@ const SidebarContent: React.FC<SidebarContentProps> = ({
     };
   }, []);
 
+  if (spaces.length === 0)
+  {
+    return (
+      <div className="h-full flex items-center justify-center px-6 text-center text-gray-500 dark:text-gray-400">
+        Create your first Space with the + button below.
+      </div>
+    );
+  }
+
   return (
     <div
       ref={scrollContainerRef}
@@ -196,7 +219,8 @@ const SidebarContent: React.FC<SidebarContentProps> = ({
         activeSpace={activeSpace}
         onShowToast={onShowToast}
         onPerformAction={onPerformAction}
-        useSpaces={useSpaces}
+        onAiRename={onAiRenameBookmark}
+        onBookmarkCreated={onBookmarkCreated}
       />
       <TabList
         onPin={onPin}
@@ -208,9 +232,9 @@ const SidebarContent: React.FC<SidebarContentProps> = ({
         arcStyleEnabled={bookmarkOpenMode === 'arc'}
         filterText={filterText}
         activeSpace={activeSpace}
-        useSpaces={useSpaces}
         onSpaceDropTargetChange={onSpaceDropTargetChange}
         onPerformAction={onPerformAction}
+        onBookmarkCreated={onBookmarkCreated}
       />
     </div>
   );
@@ -226,19 +250,30 @@ interface SpaceTitleProps
 
 const SpaceTitle: React.FC<SpaceTitleProps> = ({ onEditSpace, onDeleteSpace, onCloseAllTabs }) =>
 {
-  const { activeSpace } = useSpacesContext();
+  const { spaces, activeSpace } = useSpacesContext();
   const fontSize = useFontSize();
-  const titleFontSize = fontSize - 1;
+  const titleFontSize = fontSize + 1;
   const iconSize = titleFontSize;
-  const isAllSpace = activeSpace.id === 'all';
   const colorStyle = GROUP_COLORS[activeSpace.color] ?? GROUP_COLORS.grey;
+
+  if (spaces.length === 0)
+  {
+    return (
+      <SectionHeader
+        label="Create a Space"
+        menuContent={null}
+        fontSize={titleFontSize}
+        showMenuButton={false}
+        labelClassName="font-bold"
+        className="arc-space-title"
+      />
+    );
+  }
 
   // Build icon element based on icon type
   const iconElement = isEmoji(activeSpace.icon) ? (
     // Emoji icons render as text
     <span style={{ fontSize: iconSize }} className="leading-none">{activeSpace.icon}</span>
-  ) : activeSpace.icon === 'LayoutGrid' ? (
-    <LayoutGrid size={iconSize} />
   ) : (
     // Lucide/Iconify icons use CSS mask so they inherit currentColor from the title text
     <span
@@ -261,10 +296,10 @@ const SpaceTitle: React.FC<SpaceTitleProps> = ({ onEditSpace, onDeleteSpace, onC
 
   const menuContent = (
     <SpaceContextMenuContent
-      isAllSpace={isAllSpace}
       onEdit={() => onEditSpace(activeSpace)}
       onDelete={() => onDeleteSpace(activeSpace)}
       onCloseAllTabs={() => onCloseAllTabs(activeSpace)}
+      canDelete={spaces.length > 1}
     />
   );
 
@@ -278,6 +313,7 @@ const SpaceTitle: React.FC<SpaceTitleProps> = ({ onEditSpace, onDeleteSpace, onC
       showMenuButton={true}
       textClassName={colorStyle.text}
       labelClassName="font-bold"
+      className="arc-space-title"
     />
   );
 };
@@ -363,7 +399,7 @@ interface SwipeableContainerProps extends SidebarContentProps
 
 const SwipeableContainer: React.FC<SwipeableContainerProps> = (props) =>
 {
-  const { allSpaces, activeSpaceId, setActiveSpaceId, switchToSpace } = useSpacesContext();
+  const { allSpaces, activeSpaceId, switchToSpace } = useSpacesContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const [slideDirection, setSlideDirection] = useState<'left' | 'right' | null>(null);
   const prevSpaceIdRef = useRef(activeSpaceId);
@@ -393,15 +429,6 @@ const SwipeableContainer: React.FC<SwipeableContainerProps> = (props) =>
       return () => clearTimeout(timer);
     }
   }, [slideDirection]);
-
-  // Reset to "all" space when useSpaces is turned off
-  useEffect(() =>
-  {
-    if (!props.useSpaces && activeSpaceId !== 'all')
-    {
-      setActiveSpaceId('all');
-    }
-  }, [props.useSpaces, activeSpaceId, setActiveSpaceId]);
 
   const handleSwipe = useCallback((direction: 'left' | 'right') =>
   {
@@ -438,13 +465,13 @@ interface ExportDialogWrapperProps
   isOpen: boolean;
   onClose: () => void;
   pinnedSites: readonly PinnedSite[];
-  bookmarks: chrome.bookmarks.BookmarkTreeNode[];
 }
 
 const ExportDialogWrapper: React.FC<ExportDialogWrapperProps> = (props) =>
 {
   const { spaces } = useSpacesContext();
-  return <ExportDialog {...props} spaces={spaces} />;
+  const { bookmarks } = useBookmarks();
+  return <ExportDialog {...props} bookmarks={bookmarks} spaces={spaces} />;
 };
 
 // Wrapper for ImportDialog that uses spaces from context
@@ -500,6 +527,27 @@ const AppContainer: React.FC<AppContainerProps> = ({ useSpaceColor, spaceColorAl
   useFollowActiveTab(followActiveTab);
   const [isDark, setIsDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
 
+  useLayoutEffect(() =>
+  {
+    if (performance.getEntriesByName('sidebar:first-commit').length > 0) return;
+
+    performance.mark('sidebar:first-commit');
+    performance.measure('sidebar:react-first-commit', 'sidebar:main-evaluated', 'sidebar:first-commit');
+
+    const frameId = requestAnimationFrame(() =>
+    {
+      performance.mark('sidebar:first-frame', {
+        detail: {
+          bookmarkRows: document.querySelectorAll('[data-bookmark-id]').length,
+          tabRows: document.querySelectorAll('[data-tab-id]').length,
+        },
+      });
+      performance.measure('sidebar:time-to-first-frame', 'sidebar:html-start', 'sidebar:first-frame');
+    });
+
+    return () => cancelAnimationFrame(frameId);
+  }, []);
+
   // Keep isDark in sync when the OS theme changes
   useEffect(() =>
   {
@@ -513,11 +561,11 @@ const AppContainer: React.FC<AppContainerProps> = ({ useSpaceColor, spaceColorAl
   const bgStyle = applySpaceColor
     ? { backgroundColor: getSpaceBgColor(activeSpace.color, isDark, spaceColorAlpha / 100) }
     : {};
-  const bgClass = applySpaceColor ? '' : 'bg-white dark:bg-gray-900';
+  const bgClass = applySpaceColor ? '' : 'arc-neutral-background';
 
   return (
     <div
-      className={`relative flex flex-col h-screen ${bgClass} text-gray-900 dark:text-gray-100 overflow-hidden`}
+      className={`arc-theme relative flex flex-col h-screen ${bgClass} text-gray-900 dark:text-gray-100 overflow-hidden`}
       style={{ fontSize: `${fontSize}px`, ...bgStyle }}
     >
       {children}
@@ -576,11 +624,6 @@ function App() {
       serialize: (v) => v
     }
   );
-  const [spacesEnabled, setSpacesEnabled] = useChromeLocalStorage(
-    'sidebar-use-spaces',
-    true,
-    { parse: (v) => v === 'true', serialize: (v) => v.toString() }
-  );
   const [arcSingleClickOpensTab, setArcSingleClickOpensTab] = useChromeLocalStorage(
     'sidebar-arc-single-click-opens-tab',
     true,
@@ -605,6 +648,11 @@ function App() {
     FOLLOW_ACTIVE_TAB_KEY,
     DEFAULT_FOLLOW_ACTIVE_TAB_MODE,
     { parse: parseFollowActiveTabMode, serialize: (v) => v }
+  );
+  const [aiSettings, setAiSettings] = useChromeLocalStorage<AiRenameSettings>(
+    AI_SETTINGS_STORAGE_KEY,
+    DEFAULT_AI_RENAME_SETTINGS,
+    { parse: parseAiRenameSettings, serialize: JSON.stringify }
   );
   const [showFilterArea, setShowFilterArea] = useLocalStorage(
     'sidebar-show-filter-area',
@@ -639,21 +687,22 @@ function App() {
     }
   }, []);
 
-  const [lastSeenVersion, setLastSeenVersion] = useChromeLocalStorage(
+  const [lastSeenVersion, setLastSeenVersion, lastSeenVersionLoaded] = useChromeLocalStorage(
     'sidebar-last-seen-version',
     '',
     { parse: (v) => v, serialize: (v) => v }
   );
 
-  const isNewInstall = lastSeenVersion === '';
+  const { isNewInstall, hasVersionChanged } = resolveVersionDialogState({
+    isLoaded: lastSeenVersionLoaded,
+    lastSeenVersion,
+    currentVersion,
+  });
 
   const [showWelcome, setShowWelcome] = useState(false);
   const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [whatsNewDialogGroups, setWhatsNewDialogGroups] = useState<ChangelogGroup[]>([]);
   const [whatsNewDialogVersion, setWhatsNewDialogVersion] = useState<string | undefined>(undefined);
-
-  // True only for existing users who upgraded - excludes new installs and already-current versions.
-  const hasVersionChanged = !isNewInstall && lastSeenVersion !== currentVersion;
 
   // Trigger What's New dialog once lastSeenVersion loads from async storage.
   // hasVersionChanged is false for new installs (welcome handles those) and when already up to date.
@@ -694,6 +743,7 @@ function App() {
   const [showSpaceDeleteDialog, setShowSpaceDeleteDialog] = useState(false);
   const bookmarkDropResolverRef = useRef<ResolveBookmarkDropTarget | null>(null);
   const newsHoverTimerRef = useRef<number | null>(null);
+  const aiRequestIdsRef = useRef(new Map<string, number>());
   // Clean up hover timer on unmount
   useEffect(() =>
   {
@@ -714,13 +764,13 @@ function App() {
     addPins,
     removePin,
     updatePin,
+    renamePinIfUnchanged,
     resetFavicon,
     movePin,
     duplicatePin,
     replacePinnedSites,
     appendPinnedSites,
   } = usePinnedSites();
-  const { bookmarks } = useBookmarks();
   const { tabs, refreshTabs } = useTabs();
   const { hasUnreadNews, markNewsRead, openNews } = useNewsCheck();
 
@@ -730,12 +780,12 @@ function App() {
     setTabGroupDisplayOrder(newSettings.tabGroupDisplayOrder);
     setPinnedIconSize(newSettings.pinnedIconSize);
     setBookmarkOpenMode(newSettings.bookmarkOpenMode);
-    setSpacesEnabled(newSettings.useSpaces);
     setArcSingleClickOpensTab(newSettings.arcSingleClickOpensTab);
     setAudioQuickJump(newSettings.audioQuickJump);
     setUseSpaceColor(newSettings.useSpaceColor);
     setSpaceColorAlpha(newSettings.spaceColorAlpha);
     setFollowActiveTab(newSettings.followActiveTab);
+    setAiSettings(newSettings.aiSettings);
     setShowSettings(false);
   };
 
@@ -790,6 +840,191 @@ function App() {
   const hideToast = useCallback(() => {
     setToastVisible(false);
   }, []);
+
+  /**
+   * 为同一目标生成递增请求号，较早返回的慢请求不能覆盖较新的重命名。
+   */
+  const beginAiRequest = useCallback((targetKey: string): number =>
+  {
+    const next = (aiRequestIdsRef.current.get(targetKey) ?? 0) + 1;
+    aiRequestIdsRef.current.set(targetKey, next);
+    return next;
+  }, []);
+
+  const hasPageContentAccess = useCallback(async (): Promise<boolean> =>
+  {
+    try
+    {
+      return await chrome.permissions.contains({ origins: ['http://*/*', 'https://*/*'] });
+    }
+    catch
+    {
+      return false;
+    }
+  }, []);
+
+  /**
+   * 手动操作可直接申请 API origin；自动操作只能使用设置阶段已经授予的权限。
+   */
+  const hasApiAccess = useCallback(async (manualRequest: boolean): Promise<boolean> =>
+  {
+    const origin = getHostPermissionPattern(aiSettings.baseUrl);
+    return manualRequest
+      ? await chrome.permissions.request({ origins: [origin] })
+      : await chrome.permissions.contains({ origins: [origin] });
+  }, [aiSettings.baseUrl]);
+
+  /**
+   * 对固定项目执行 AI 重命名，并通过后台条件写入保护用户后续编辑。
+   */
+  const handleAiRenamePin = useCallback(async (
+    site: PinnedSite,
+    tabId?: number,
+    notify = true
+  ) =>
+  {
+    if (!aiSettings.baseUrl.trim() || !aiSettings.apiKey.trim() || !aiSettings.model.trim())
+    {
+      if (notify)
+      {
+        showToast('Configure and validate AI settings first');
+        setShowSettings(true);
+      }
+      return;
+    }
+
+    const targetKey = `pin:${site.id}`;
+    const requestId = beginAiRequest(targetKey);
+    try
+    {
+      if (!await hasApiAccess(notify))
+      {
+        throw new Error('Permission to access the API host was not granted');
+      }
+      const newTitle = await new OpenAiCompatibleClient().generateTitle(aiSettings, {
+        url: site.url,
+        title: site.title,
+        tabId,
+        allowPageContent: await hasPageContentAccess(),
+      });
+      if (aiRequestIdsRef.current.get(targetKey) !== requestId) return;
+
+      await renamePinIfUnchanged(site.id, site.title, site.url, newTitle);
+      if (notify) showToast(`Renamed to “${newTitle}”`);
+    }
+    catch (error)
+    {
+      if (aiRequestIdsRef.current.get(targetKey) !== requestId) return;
+      const message = error instanceof Error ? error.message : 'AI rename failed';
+      showToast(notify ? message : `Automatic AI rename failed: ${message}`);
+    }
+  }, [aiSettings, beginAiRequest, hasApiAccess, hasPageContentAccess, renamePinIfUnchanged, showToast]);
+
+  /**
+   * 书签 API 没有事务式条件更新，因此写入前重新读取并核对标题与 URL。
+   */
+  const handleAiRenameBookmark = useCallback(async (
+    bookmark: chrome.bookmarks.BookmarkTreeNode,
+    tabId?: number,
+    notify = true
+  ) =>
+  {
+    if (!bookmark.url) return;
+    if (!aiSettings.baseUrl.trim() || !aiSettings.apiKey.trim() || !aiSettings.model.trim())
+    {
+      if (notify)
+      {
+        showToast('Configure and validate AI settings first');
+        setShowSettings(true);
+      }
+      return;
+    }
+
+    const targetKey = `bookmark:${bookmark.id}`;
+    const requestId = beginAiRequest(targetKey);
+    try
+    {
+      if (!await hasApiAccess(notify))
+      {
+        throw new Error('Permission to access the API host was not granted');
+      }
+      const newTitle = await new OpenAiCompatibleClient().generateTitle(aiSettings, {
+        url: bookmark.url,
+        title: bookmark.title,
+        tabId,
+        allowPageContent: await hasPageContentAccess(),
+      });
+      if (aiRequestIdsRef.current.get(targetKey) !== requestId) return;
+
+      const current = (await chrome.bookmarks.get(bookmark.id))[0];
+      if (!current || current.title !== bookmark.title || current.url !== bookmark.url) return;
+      await chrome.bookmarks.update(bookmark.id, { title: newTitle });
+      if (notify) showToast(`Renamed to “${newTitle}”`);
+    }
+    catch (error)
+    {
+      if (aiRequestIdsRef.current.get(targetKey) !== requestId) return;
+      const message = error instanceof Error ? error.message : 'AI rename failed';
+      showToast(notify ? message : `Automatic AI rename failed: ${message}`);
+    }
+  }, [aiSettings, beginAiRequest, hasApiAccess, hasPageContentAccess, showToast]);
+
+  /**
+   * 先完成固定操作，再异步命名；AI 失败不会撤销用户刚创建的固定项目。
+   */
+  const handleAddPin = useCallback(async (
+    url: string,
+    title: string,
+    faviconUrl?: string,
+    atIndex?: number
+  ) =>
+  {
+    const newPin = await addPin(url, title, faviconUrl, atIndex);
+    if (newPin && aiSettings.autoRename)
+    {
+      void handleAiRenamePin(newPin, undefined, false);
+    }
+  }, [addPin, aiSettings.autoRename, handleAiRenamePin]);
+
+  const handlePinFromSidebar = useCallback(async (
+    url: string,
+    title: string,
+    faviconUrl?: string,
+    tabId?: number
+  ) =>
+  {
+    const newPin = await addPin(url, title, faviconUrl);
+    if (newPin && aiSettings.autoRename)
+    {
+      void handleAiRenamePin(newPin, tabId, false);
+    }
+  }, [addPin, aiSettings.autoRename, handleAiRenamePin]);
+
+  const handleAddPins = useCallback(async (
+    pins: Array<{ url: string; title: string; faviconUrl?: string }>
+  ) =>
+  {
+    const newPins = await addPins(pins);
+    if (aiSettings.autoRename)
+    {
+      // 多选固定会产生多个独立请求；每个请求失败都只保留自己的原标题。
+      for (const pin of newPins)
+      {
+        void handleAiRenamePin(pin, undefined, false);
+      }
+    }
+  }, [addPins, aiSettings.autoRename, handleAiRenamePin]);
+
+  const handleBookmarkCreated = useCallback((
+    bookmark: chrome.bookmarks.BookmarkTreeNode,
+    tabId?: number
+  ) =>
+  {
+    if (aiSettings.autoRename)
+    {
+      void handleAiRenameBookmark(bookmark, tabId, false);
+    }
+  }, [aiSettings.autoRename, handleAiRenameBookmark]);
 
   // Execute an undoable action: run do(), show toast with undo button
   const performAction = useCallback(async (action: UndoableAction) => {
@@ -939,69 +1174,84 @@ function App() {
       <SelectionProvider>
       <UnifiedDndProvider>
       <AppContainer useSpaceColor={useSpaceColor} spaceColorAlpha={spaceColorAlpha} fontSize={fontSize} followActiveTab={followActiveTab}>
-      <SettingsDialog
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-        settings={{
-          fontSize,
-          hideOtherBookmarks,
-          tabGroupDisplayOrder,
-          pinnedIconSize,
-          bookmarkOpenMode,
-          useSpaces: spacesEnabled,
-          arcSingleClickOpensTab,
-          audioQuickJump,
-          useSpaceColor,
-          spaceColorAlpha,
-          followActiveTab,
-        }}
-        onApply={handleApplySettings}
-      />
+      <Suspense fallback={null}>
+        {showSettings && (
+          <SettingsDialog
+            isOpen
+            onClose={() => setShowSettings(false)}
+            settings={{
+              fontSize,
+              hideOtherBookmarks,
+              tabGroupDisplayOrder,
+              pinnedIconSize,
+              bookmarkOpenMode,
+              arcSingleClickOpensTab,
+              audioQuickJump,
+              useSpaceColor,
+              spaceColorAlpha,
+              followActiveTab,
+              aiSettings,
+            }}
+            onApply={handleApplySettings}
+          />
+        )}
 
-      <AboutDialog
-        isOpen={showAbout}
-        onClose={() => setShowAbout(false)}
-        onShowWelcome={() => setShowWelcome(true)}
-      />
+        {showAbout && (
+          <AboutDialog
+            isOpen
+            onClose={() => setShowAbout(false)}
+            onShowWelcome={() => setShowWelcome(true)}
+          />
+        )}
 
-      <ExportDialogWrapper
-        isOpen={showExport}
-        onClose={() => setShowExport(false)}
-        pinnedSites={pinnedSites}
-        bookmarks={bookmarks}
-      />
+        {showExport && (
+          <ExportDialogWrapper
+            isOpen
+            onClose={() => setShowExport(false)}
+            pinnedSites={pinnedSites}
+          />
+        )}
 
-      <ImportDialogWrapper
-        isOpen={showImport}
-        onClose={() => setShowImport(false)}
-        replacePinnedSites={replacePinnedSites}
-        appendPinnedSites={appendPinnedSites}
-      />
+        {showImport && (
+          <ImportDialogWrapper
+            isOpen
+            onClose={() => setShowImport(false)}
+            replacePinnedSites={replacePinnedSites}
+            appendPinnedSites={appendPinnedSites}
+          />
+        )}
 
-      <ArcImportDialogWrapper
-        isOpen={showArcImport}
-        onClose={() => setShowArcImport(false)}
-        replacePinnedSites={replacePinnedSites}
-        appendPinnedSites={appendPinnedSites}
-      />
+        {showArcImport && (
+          <ArcImportDialogWrapper
+            isOpen
+            onClose={() => setShowArcImport(false)}
+            replacePinnedSites={replacePinnedSites}
+            appendPinnedSites={appendPinnedSites}
+          />
+        )}
 
-      <WelcomeDialog
-        isOpen={isNewInstall || showWelcome}
-        onClose={() => {
-          setLastSeenVersion(currentVersion);
-          setShowWelcome(false);
-        }}
-      />
+        {(isNewInstall || showWelcome) && (
+          <WelcomeDialog
+            isOpen
+            onClose={() => {
+              setLastSeenVersion(currentVersion);
+              setShowWelcome(false);
+            }}
+          />
+        )}
 
-      <WhatsNewDialog
-        isOpen={showWhatsNew}
-        groups={whatsNewDialogGroups}
-        version={whatsNewDialogVersion}
-        onClose={() => {
-          setLastSeenVersion(currentVersion);
-          setShowWhatsNew(false);
-        }}
-      />
+        {showWhatsNew && (
+          <WhatsNewDialog
+            isOpen
+            groups={whatsNewDialogGroups}
+            version={whatsNewDialogVersion}
+            onClose={() => {
+              setLastSeenVersion(currentVersion);
+              setShowWhatsNew(false);
+            }}
+          />
+        )}
+      </Suspense>
 
       <DropdownMenu.Root
         open={showAudioDialog}
@@ -1192,12 +1442,13 @@ function App() {
         resetFavicon={resetFavicon}
         movePin={movePin}
         duplicatePin={duplicatePin}
-        addPin={addPin}
+        addPin={handleAddPin}
         iconSize={pinnedIconSize}
         bookmarkOpenMode={bookmarkOpenMode}
         filterLiveTabs={showFilterArea && filterLiveTabs}
         filterText={filterText}
         onPerformAction={performAction}
+        onAiRename={handleAiRenamePin}
       />
 
       {/* Space Title */}
@@ -1209,8 +1460,8 @@ function App() {
 
       {/* Content with 2-finger swipe navigation */}
       <SwipeableContainer
-        onPin={addPin}
-        onPinMultiple={addPins}
+        onPin={handlePinFromSidebar}
+        onPinMultiple={handleAddPins}
         hideOtherBookmarks={hideOtherBookmarks}
         externalDropTarget={externalDropTarget}
         bookmarkOpenMode={bookmarkOpenMode}
@@ -1220,12 +1471,13 @@ function App() {
         filterText={filterText}
         tabGroupDisplayOrder={tabGroupDisplayOrder}
         onTabGroupDisplayOrderChange={setTabGroupDisplayOrder}
-        useSpaces={spacesEnabled}
         onExternalDropTargetChange={setExternalDropTarget}
         resolveBookmarkDropTarget={() => bookmarkDropResolverRef.current}
         onShowToast={showToast}
         onPerformAction={performAction}
         onSpaceDropTargetChange={setSpaceDropTargetId}
+        onAiRenameBookmark={handleAiRenameBookmark}
+        onBookmarkCreated={handleBookmarkCreated}
       />
 
       {/* Space Dialogs */}
@@ -1239,16 +1491,13 @@ function App() {
         onPerformAction={performAction}
       />
 
-      {/* Space Bar - only shown when useSpaces is enabled */}
-      {spacesEnabled && (
-        <SpaceBar
-          onCreateSpace={handleCreateSpace}
-          onEditSpace={handleEditSpace}
-          onDeleteSpace={handleDeleteSpace}
-          dropTargetSpaceId={spaceDropTargetId}
-          onPerformAction={performAction}
-        />
-      )}
+      <SpaceBar
+        onCreateSpace={handleCreateSpace}
+        onEditSpace={handleEditSpace}
+        onDeleteSpace={handleDeleteSpace}
+        dropTargetSpaceId={spaceDropTargetId}
+        onPerformAction={performAction}
+      />
 
       <Toast
         message={toastMessage}
@@ -1269,7 +1518,7 @@ function App() {
             isOpen={showTestRunner}
             onOpenChange={setShowTestRunner}
             pinnedSites={pinnedSites}
-            addPin={addPin}
+            addPin={async (url, title) => { await addPin(url, title); }}
             removePin={removePin}
             updatePin={updatePin}
             resetFavicon={resetFavicon}

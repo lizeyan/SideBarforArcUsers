@@ -1,15 +1,20 @@
 {
   "manifest_version": 3,
-  "name": "Side Bar for Arc Users",
-  "version": "1.0.344",
-  "description": "Arc Browser like Pinned Sites, Bookmarks and Active Tabs in Side Panel",
+  "name": "Side Bar for Arc Users — Arc Style",
+  "version": "1.0.348",
+  "description": "Arc-style pinned sites, bookmarks, spaces and active tabs in Chrome's side panel",
   "permissions": [
     "sidePanel",
     "bookmarks",
     "tabs",
     "tabGroups",
     "storage",
-    "favicon"
+    "favicon",
+    "scripting"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "icons": {
     "16": "icon16.png",

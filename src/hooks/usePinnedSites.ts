@@ -38,12 +38,29 @@ export const usePinnedSites = () => {
     setError(String(err));
   }, []);
 
-  const loadPinnedSites = useCallback(() => {
-    pinnedSitesManagerProxy.load().catch(err => reportFailure('load', err));
+  const loadPinnedSites = useCallback(async () => {
+    const shouldMeasure = performance.getEntriesByName('sidebar:pinned-sites-load').length === 0;
+    if (shouldMeasure) performance.mark('sidebar:pinned-sites-start');
+    try
+    {
+      await pinnedSitesManagerProxy.load();
+    }
+    catch (err)
+    {
+      reportFailure('load', err);
+    }
+    finally
+    {
+      if (shouldMeasure)
+      {
+        performance.mark('sidebar:pinned-sites-ready');
+        performance.measure('sidebar:pinned-sites-load', 'sidebar:pinned-sites-start', 'sidebar:pinned-sites-ready');
+      }
+    }
   }, [reportFailure]);
 
   useEffect(() => {
-    loadPinnedSites();
+    void loadPinnedSites();
   }, [loadPinnedSites]);
 
   // Lazy-resolve missing favicons (Scenario 3, 4 above).
@@ -70,6 +87,19 @@ export const usePinnedSites = () => {
   // which TypeScript cannot infer a type for on its own.
   const runResolvePass: (sites: readonly PinnedSite[]) => Promise<void> = useCallback(async (sites: readonly PinnedSite[]): Promise<void> =>
   {
+    const shouldMeasure = performance.getEntriesByName('sidebar:favicon-resolution').length === 0;
+    if (shouldMeasure) performance.mark('sidebar:favicon-resolution-start');
+    const finishMeasure = () =>
+    {
+      if (!shouldMeasure) return;
+      performance.mark('sidebar:favicon-resolution-ready');
+      performance.measure(
+        'sidebar:favicon-resolution',
+        'sidebar:favicon-resolution-start',
+        'sidebar:favicon-resolution-ready'
+      );
+    };
+
     const needsCustomIcon = sites.filter(
       site => site.customIconName && !site.favicon && !site.emoji
     );
@@ -90,6 +120,7 @@ export const usePinnedSites = () => {
 
     if (needsCustomIcon.length === 0 && needsSiteFavicon.length === 0)
     {
+      finishMeasure();
       return;
     }
 
@@ -159,6 +190,7 @@ export const usePinnedSites = () => {
     finally
     {
       isResolvingRef.current = false;
+      finishMeasure();
 
       // Run the change that arrived mid-pass, against the list as it stands
       // now rather than whatever it was when that change was skipped. Cannot
@@ -209,8 +241,16 @@ export const usePinnedSites = () => {
       favicon,
     };
 
-    try { await pinnedSitesManagerProxy.addPins([newPin], atIndex); }
-    catch (err) { reportFailure('addPin', err); }
+    try
+    {
+      await pinnedSitesManagerProxy.addPins([newPin], atIndex);
+      return newPin;
+    }
+    catch (err)
+    {
+      reportFailure('addPin', err);
+      return null;
+    }
   }, [reportFailure]);
 
   // Scenario 1b: pin multiple tabs at once (e.g. drag a URL group). Same as addPin.
@@ -237,8 +277,16 @@ export const usePinnedSites = () => {
       })
     );
 
-    try { await pinnedSitesManagerProxy.addPins(newPins); }
-    catch (err) { reportFailure('addPins', err); }
+    try
+    {
+      await pinnedSitesManagerProxy.addPins(newPins);
+      return newPins;
+    }
+    catch (err)
+    {
+      reportFailure('addPins', err);
+      return [];
+    }
   }, [reportFailure]);
 
   const removePin = useCallback((id: string) => {
@@ -259,6 +307,23 @@ export const usePinnedSites = () => {
     pinnedSitesManagerProxy
       .updatePin(id, { title, url, favicon, customIconName, iconColor, emoji })
       .catch(err => reportFailure('updatePin', err));
+  }, [reportFailure]);
+
+  const renamePinIfUnchanged = useCallback(async (
+    id: string,
+    expectedTitle: string,
+    expectedUrl: string,
+    newTitle: string
+  ) => {
+    try
+    {
+      await pinnedSitesManagerProxy.renamePinIfUnchanged(id, expectedTitle, expectedUrl, newTitle);
+    }
+    catch (err)
+    {
+      reportFailure('AI rename pin', err);
+      throw err;
+    }
   }, [reportFailure]);
 
   // Scenario 6: user explicitly resets to site favicon via "Reset to site icon".
@@ -323,6 +388,7 @@ export const usePinnedSites = () => {
     addPins,
     removePin,
     updatePin,
+    renamePinIfUnchanged,
     resetFavicon,
     movePin,
     duplicatePin,

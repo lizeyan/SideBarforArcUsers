@@ -29,7 +29,7 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
   onPerformAction,
 }) =>
 {
-  const { allSpaces, spaces, activeSpaceId, switchToSpace, moveSpace, getTabIdsInSpace, windowId } = useSpacesContext();
+  const { spaces, activeSpaceId, switchToSpace, moveSpace, getTabIdsInSpace, windowId } = useSpacesContext();
   const { getItemKeyForTab, restoreItemAssociation } = useBookmarkTabsContext();
   const { activeDragData, overId, dropPosition, registerDropHandler, unregisterDropHandler } = useUnifiedDnd();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -119,10 +119,6 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
       ? dropData.targetId.slice(6)
       : dropData.targetId;
 
-    // Prevent dropping before "All" space
-    const isDropBeforeAll = dropData.targetId === 'all' && position === 'before';
-    if (isDropBeforeAll) return;
-
     switch (acceptedFormat)
     {
       case DragFormat.SPACE:
@@ -199,15 +195,15 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
 
   // Create sortable IDs for SortableContext
   const sortableSpaceIds = useMemo(
-    () => allSpaces.map(space => `space-${space.id}`),
-    [allSpaces]
+    () => spaces.map(space => `space-${space.id}`),
+    [spaces]
   );
 
   return (
     <>
-      <div className="flex items-stretch border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+      <div className="arc-space-bar flex items-stretch border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
         {/* Vertical "SPACE" label */}
-        <div className="flex items-center justify-center px-0.5">
+        <div className="arc-space-label flex items-center justify-center px-0.5">
           <span
             className="text-[8px] font-medium text-gray-400 dark:text-gray-500 tracking-wide"
             style={{
@@ -227,7 +223,7 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
           data-dnd-zone="spaceBar"
         >
           <SortableContext items={sortableSpaceIds} strategy={horizontalListSortingStrategy}>
-            {allSpaces.map((space, index) => (
+            {spaces.map((space, index) => (
               <SpaceIcon
                 key={space.id}
                 space={space}
@@ -237,8 +233,8 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
                 onEdit={() => onEditSpace(space)}
                 onDelete={() => handleDelete(space)}
                 onCloseAllTabs={() => handleCloseAllTabsInSpace(space)}
-                isAllSpace={space.id === 'all'}
-                isDraggable={space.id !== 'all'}
+                canDelete={spaces.length > 1}
+                isDraggable
                 isDropTarget={
                   dropTargetSpaceId === space.id ||
                   (isSpaceDrag && overId === `space-${space.id}`) ||
@@ -255,7 +251,7 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
         </div>
 
         {/* Fixed "+" button */}
-        <div className="flex items-center px-1">
+        <div className="arc-create-space flex items-center px-1">
           <button
             onClick={onCreateSpace}
             title="Create new space"

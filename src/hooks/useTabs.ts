@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useSyncExternalStore } from 'react';
 import { createChromeErrorHandler } from '../utils/chromeError';
 import type { TabGroupDisplayOrder } from '../components/SettingsDialog';
+import { SharedTabStore, TabSource } from '../stores/sharedTabStore';
 
 // Helper: safely extract hostname from URL
 const getHostname = (url: string | undefined): string =>
@@ -28,8 +29,63 @@ const compareDomainTitle = (a: chrome.tabs.Tab, b: chrome.tabs.Tab): number =>
 // Module-level Set tracking windowIds with active batch operations
 const batchOperationWindows = new Set<number>();
 
+/** 为共享 Store 提供当前窗口 Tab 查询和七类 Chrome 事件监听器。 */
+const createChromeTabSource = (): TabSource | undefined =>
+{
+  if (typeof chrome === 'undefined' || !chrome.tabs) return undefined;
+
+  return {
+    readTabs: (onResult) =>
+    {
+      chrome.tabs.query({ currentWindow: true }, (tabs) =>
+      {
+        onResult(tabs, chrome.runtime.lastError?.message ?? null);
+      });
+    },
+    subscribe: (onChange) =>
+    {
+      const onCreated = () => onChange();
+      const onUpdated = () => onChange();
+      const onMoved = () => onChange();
+      const onRemoved = () => onChange();
+      const onDetached = () => onChange();
+      const onAttached = () => onChange();
+      const onActivated = () => onChange();
+
+      chrome.tabs.onCreated.addListener(onCreated);
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      chrome.tabs.onMoved.addListener(onMoved);
+      chrome.tabs.onRemoved.addListener(onRemoved);
+      chrome.tabs.onDetached.addListener(onDetached);
+      chrome.tabs.onAttached.addListener(onAttached);
+      chrome.tabs.onActivated.addListener(onActivated);
+
+      return () =>
+      {
+        chrome.tabs.onCreated.removeListener(onCreated);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        chrome.tabs.onMoved.removeListener(onMoved);
+        chrome.tabs.onRemoved.removeListener(onRemoved);
+        chrome.tabs.onDetached.removeListener(onDetached);
+        chrome.tabs.onAttached.removeListener(onAttached);
+        chrome.tabs.onActivated.removeListener(onActivated);
+      };
+    },
+  };
+};
+
+const sharedTabStore = new SharedTabStore(
+  createChromeTabSource,
+  () => batchOperationWindows.size > 0
+);
+
 export const useTabs = (windowId?: number) => {
-  const [tabs, setTabs] = useState<chrome.tabs.Tab[]>([]);
+  const tabSnapshot = useSyncExternalStore(
+    sharedTabStore.subscribe,
+    sharedTabStore.getSnapshot,
+    sharedTabStore.getSnapshot
+  );
+  const tabs = tabSnapshot.tabs;
   const [error, setError] = useState<string | null>(null);
 
   const handleError = useCallback(
@@ -37,49 +93,7 @@ export const useTabs = (windowId?: number) => {
     []
   );
 
-  const fetchTabs = useCallback(() => {
-    if (typeof chrome !== 'undefined' && chrome.tabs) {
-      chrome.tabs.query({ currentWindow: true }, (result) => {
-        if (!handleError('fetch')) {
-          setTabs(result);
-        }
-      });
-    }
-    else {
-      setError('Unable to access browser tabs');
-    }
-  }, [handleError]);
-
-  useEffect(() => {
-    fetchTabs();
-
-    const listeners = [
-      chrome.tabs?.onCreated,
-      chrome.tabs?.onUpdated,
-      chrome.tabs?.onMoved,
-      chrome.tabs?.onRemoved,
-      chrome.tabs?.onDetached,
-      chrome.tabs?.onAttached,
-      chrome.tabs?.onActivated,
-    ];
-
-    // Debounce to coalesce rapid events (e.g., tab creation fires multiple events)
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const handleUpdate = () => {
-      if (windowId && batchOperationWindows.has(windowId)) return;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        fetchTabs();
-      }, 50);
-    };
-
-    listeners.forEach((listener: any) => listener?.addListener(handleUpdate));
-
-    return () => {
-      listeners.forEach((listener: any) => listener?.removeListener(handleUpdate));
-      if (debounceTimer) clearTimeout(debounceTimer);
-    };
-  }, [fetchTabs]);
+  const fetchTabs = sharedTabStore.refresh;
 
   // Close multiple tabs with batch mode to suppress individual onRemoved events
   const closeTabs = useCallback((tabIds: number[]) => {
@@ -421,6 +435,6 @@ export const useTabs = (windowId?: number) => {
     sortGroupTabs,
     // closeAllTabs,
     refreshTabs: fetchTabs,
-    error
+    error: error ?? tabSnapshot.error
   };
 };

@@ -30,6 +30,7 @@ interface PinnedBarProps
   filterLiveTabs?: boolean;
   filterText?: string;
   onPerformAction?: (action: UndoableAction) => Promise<void>;
+  onAiRename?: (site: PinnedSite, tabId?: number) => void;
 }
 
 export const PinnedBar = ({
@@ -44,10 +45,11 @@ export const PinnedBar = ({
   filterLiveTabs = false,
   filterText = '',
   onPerformAction,
+  onAiRename,
 }: PinnedBarProps) =>
 {
-  const { openPinnedTab, closePinnedTab, isPinnedLoaded, isPinnedActive, isPinnedAudible, getTabIdForPinned, deassociatePinnedTab } = useBookmarkTabsContext();
-  const { windowId } = useSpacesContext();
+  const { openPinnedTab, closePinnedTab, isPinnedLoaded, isPinnedActive, isPinnedAudible, getTabIdForPinned, deassociatePinnedTab, restoreItemAssociation } = useBookmarkTabsContext();
+  const { windowId, activeSpace } = useSpacesContext();
   const { activeDragData, overId, dropPosition, registerDropHandler, unregisterDropHandler } = useUnifiedDnd();
 
   // Move pinned tab to a new window
@@ -81,7 +83,9 @@ export const PinnedBar = ({
     const action = new DeletePinnedSiteAction(
       [pinnedId],
       () => pinnedSites,
-      getTabIdForPinned
+      getTabIdForPinned,
+      deassociatePinnedTab,
+      restoreItemAssociation
     );
     if (onPerformAction)
     {
@@ -91,7 +95,7 @@ export const PinnedBar = ({
     {
       action.do();
     }
-  }, [onPerformAction, pinnedSites, getTabIdForPinned]);
+  }, [onPerformAction, pinnedSites, getTabIdForPinned, deassociatePinnedTab, restoreItemAssociation]);
 
   // Filter pinned sites based on active filters
   const hasFilters = filterLiveTabs || filterText.trim();
@@ -206,7 +210,7 @@ export const PinnedBar = ({
 
   return (
     <div
-      className="flex flex-wrap gap-1.5 px-2 py-1.5 border-b border-gray-200 dark:border-gray-700"
+      className="arc-pinned-bar flex flex-wrap gap-1.5 px-2 py-1.5 border-b border-gray-200 dark:border-gray-700"
       data-dnd-zone="pinnedBar"
     >
       {visiblePinnedSites.map((site, index) => (
@@ -218,9 +222,12 @@ export const PinnedBar = ({
           onUpdate={updatePin}
           onResetFavicon={resetFavicon}
           onDuplicate={handleDuplicatePin}
+          onAiRename={onAiRename
+            ? () => onAiRename(site, getTabIdForPinned(site.id))
+            : undefined}
           onOpen={
             bookmarkOpenMode === 'arc'
-              ? (s) => openPinnedTab(s.id, s.url)
+              ? (s) => openPinnedTab(s.id, s.url, activeSpace.id)
               : bookmarkOpenMode === 'activeTab'
                 ? (s) => chrome.tabs.update({ url: s.url })
                 : (s) => chrome.tabs.create({ url: s.url, active: true, windowId: windowId ?? undefined })

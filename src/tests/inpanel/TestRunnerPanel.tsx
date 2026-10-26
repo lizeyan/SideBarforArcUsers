@@ -437,6 +437,7 @@ export const TestRunnerPanel = ({
     restoreItemAssociation: bookmarkTabsCtx.restoreItemAssociation,
     associateExistingTab: bookmarkTabsCtx.associateExistingTab,
     deassociateBookmarkTab: bookmarkTabsCtx.deassociateBookmarkTab,
+    deassociatePinnedTab: bookmarkTabsCtx.deassociatePinnedTab,
     addPin,
     removePin,
     updatePin,
