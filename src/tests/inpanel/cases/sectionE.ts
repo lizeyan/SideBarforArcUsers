@@ -6,7 +6,7 @@ import { tabHistoryManagerProxy } from '../../../managers/proxies/tabHistoryMana
 import { resolveTabId } from '../stepHelpers';
 import { createTestBookmark, createTestPinnedSite, createTestSpace, TEST_AUDIO_URL, TEST_SPACE_VIDEO_NAME, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
 import { activateTabNative, closeTesterWindow, navigateTabHistory, openBookmarkTab, openPageForTester, openPinnedTab, openRegularTab, pause, switchSpaceVerified } from '../actions';
-import { assertAudioListIncludes, assertBookmarkLoaded, assertPinnedLoaded, assertTabActive, assertTabAudible, assertTabInSpace } from '../assertions';
+import { assertAudioListIncludes, assertBookmarkLoaded, assertPinnedLoaded, assertTabActive, assertTabAudible, assertTabInSpace, assertTabListRowExists } from '../assertions';
 
 // The runner's pause/resume checkpoint (runner.ts) persists to
 // chrome.storage.local rather than .session specifically because of this
@@ -54,6 +54,44 @@ export const E1_RELOAD_EXTENSION: TestCase = {
     assertPinnedLoaded('pin', true),
     assertTabInSpace('tabA', 'spaceA'),
     assertTabInSpace('tabB', 'spaceB'),
+  ],
+};
+
+export const E4_SIDEBAR_REOPEN: TestCase = {
+  id: 'E.4',
+  title: 'Close and reopen Side Panel preserves fixed-tab associations',
+  setup: async (getCtx) =>
+  {
+    await createTestSpace(getCtx, { ref: 'spaceA', name: TEST_SPACE_WORK_NAME });
+    await createTestBookmark(getCtx(), 'spaceA', 'E4 bookmark', testUrl('e4-bookmark'), 'bookmark');
+    await createTestPinnedSite(getCtx, 'E4 favorite', testUrl('e4-favorite'), 'favorite');
+  },
+  steps: [
+    ...switchSpaceVerified('spaceA'),
+    openBookmarkTab({ bookmarkRef: 'bookmark', url: testUrl('e4-bookmark'), spaceRef: 'spaceA', tabRef: 'bookmarkTab' }),
+    openPinnedTab({ pinRef: 'favorite', url: testUrl('e4-favorite'), tabRef: 'favoriteTab' }),
+    assertBookmarkLoaded('bookmark', true),
+    assertPinnedLoaded('favorite', true),
+    assertTabInSpace('bookmarkTab', 'spaceA'),
+    assertTabInSpace('favoriteTab', 'spaceA'),
+    assertTabListRowExists('bookmarkTab', false),
+    assertTabListRowExists('favoriteTab', false),
+
+    pause(
+      'Manual step: close and reopen the Side Panel',
+      [
+        'Close the Side Panel with its X button or extension shortcut.',
+        'Wait a few seconds, then reopen the Side Panel.',
+        'The Test Runner should resume this case automatically.',
+      ]
+    ),
+
+    assertBookmarkLoaded('bookmark', true),
+    assertPinnedLoaded('favorite', true),
+    assertTabInSpace('bookmarkTab', 'spaceA'),
+    assertTabInSpace('favoriteTab', 'spaceA'),
+    assertTabListRowExists('bookmarkTab', false),
+    assertTabListRowExists('favoriteTab', false),
   ],
 };
 
@@ -204,4 +242,5 @@ export const E3_SERVICE_WORKER_RESTART: TestCase = {
 export const SECTION_E_CASES: TestCase[] = [
   E1_RELOAD_EXTENSION,
   E3_SERVICE_WORKER_RESTART,
+  E4_SIDEBAR_REOPEN,
 ];

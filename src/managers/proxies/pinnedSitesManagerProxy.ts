@@ -214,6 +214,41 @@ class PinnedSitesManagerProxy implements Remote<PinnedSitesApi>
   }
 
   /**
+   * 条件写入不能做乐观更新：本地镜像可能刚好落后于后台，条件在后台失败时，
+   * 乐观结果会与真实列表分叉。这里等待后台原子判断后再应用权威结果。
+   */
+  async #mutateWithAuthoritativeAck(
+    method: string,
+    payload: Record<string, unknown>
+  ): Promise<PinnedSite[]>
+  {
+    this.#pendingWrites++;
+    try
+    {
+      const result = await callManager<PinnedSite[]>(ManagerId.PINNED_SITES, method, payload);
+      this.#pendingWrites--;
+
+      if (this.#pendingWrites === 0 && !this.#missedBroadcast)
+      {
+        this.#applySites(result);
+      }
+      else
+      {
+        await this.#drain(result);
+      }
+      return result;
+    }
+    catch (error)
+    {
+      this.#pendingWrites--;
+      this.getPinnedSites()
+        .then((current) => { if (this.#pendingWrites === 0) this.#applySites(current); })
+        .catch(() => {});
+      throw error;
+    }
+  }
+
+  /**
    * Called as each write returns. Does nothing while other writes of ours are
    * still out - the last one to come back is the one that can safely settle
    * the mirror.
@@ -277,6 +312,19 @@ class PinnedSitesManagerProxy implements Remote<PinnedSitesApi>
   async updatePin(id: string, edit: PinnedSiteEdit): Promise<PinnedSite[]>
   {
     return this.#mutate('updatePin', { id, edit }, sites => applyUpdatePin(sites, id, edit));
+  }
+
+  async renamePinIfUnchanged(
+    id: string,
+    expectedTitle: string,
+    expectedUrl: string,
+    newTitle: string
+  ): Promise<PinnedSite[]>
+  {
+    return this.#mutateWithAuthoritativeAck(
+      'renamePinIfUnchanged',
+      { id, expectedTitle, expectedUrl, newTitle }
+    );
   }
 
   async resetFavicon(id: string, favicon?: string): Promise<PinnedSite[]>

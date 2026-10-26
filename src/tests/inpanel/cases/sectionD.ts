@@ -7,7 +7,7 @@ import { Space } from '../../../contexts/SpacesContext';
 import { TestCase, TestStep } from '../types';
 import { createTestBookmark, createTestPinnedSite, createTestSpace, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
 import { openBookmarkTab, openPinnedTab, openRegularTab, renameSpace, switchSpaceVerified } from '../actions';
-import { assertBookmarkLoaded, assertPinnedLoaded, assertSpaceExists, assertTabExists, assertTabInSpace, assertTabUngrouped } from '../assertions';
+import { assertBookmarkLoaded, assertPinnedLoaded, assertSpaceExists, assertTabExists, assertTabInSpace } from '../assertions';
 import { resolveSpace, resolveStringRef } from '../stepHelpers';
 
 // D.1's doc step 3 (renaming from a second window and checking whether a
@@ -88,14 +88,8 @@ export const D2_DELETE_SPACE_WITH_TRACKED_TABS: TestCase = {
     openRegularTab({ url: testUrl('d2-regular'), spaceRef: 'spaceA', tabRef: 'regularTab' }),
     assertBookmarkLoaded('bm', true),
     assertPinnedLoaded('pin', true),
-    // Confirms the actual precondition the survival assertion below depends
-    // on: the pinned tab is NOT in spaceA's Chrome group at delete time
-    // (pinned tabs open ungrouped by default and this case never moves it).
-    // DeleteSpaceAction closes tabs purely by group membership - a pinned
-    // tab that IS in the group is expected to close along with everything
-    // else (deleting the space it's visibly grouped into is intentional,
-    // not a bug), which is a different scenario this case isn't testing.
-    assertTabUngrouped('pinnedTab'),
+    // Favorite 属于当前 Space 的原生组，因此 Space 生命周期也管理其真实 Tab。
+    assertTabInSpace('pinnedTab', 'spaceA'),
 
     doDeleteSpace('spaceA'),
     // Confirmed independently of the tab-survival checks below: the space
@@ -109,12 +103,8 @@ export const D2_DELETE_SPACE_WITH_TRACKED_TABS: TestCase = {
     assertSpaceExists('spaceA', false),
     assertTabExists('bookmarkTab', false),
     assertTabExists('regularTab', false),
-    // Correct behavior: an ungrouped pinned tab is untouched by deleting a
-    // space it was never actually grouped into - DeleteSpaceAction only
-    // acts on tabs it finds via the space's Chrome group, so this pin was
-    // never in scope for it to close. Expected to PASS.
-    assertTabExists('pinnedTab', true),
-    assertPinnedLoaded('pin', true),
+    assertTabExists('pinnedTab', false),
+    assertPinnedLoaded('pin', false),
 
     undoDeleteSpace(),
     assertSpaceExists('spaceA', true),

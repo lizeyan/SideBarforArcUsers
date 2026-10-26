@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import clsx from 'clsx';
 import { Dialog } from './Dialog';
 import { FolderPickerDialog } from './FolderPickerDialog';
-import { IconColorPicker, ColorOption } from './IconColorPicker';
+import { IconColorPicker } from './IconColorPicker';
+import type { ColorOption } from '../utils/iconPickerOptions';
 import { useBookmarks } from '../hooks/useBookmarks';
 import { Space } from '../contexts/SpacesContext';
 import { GROUP_COLOR_OPTIONS } from '../utils/groupColors';
@@ -425,12 +426,14 @@ export const SpaceEditDialog: React.FC<SpaceEditDialogProps> = ({
       </Dialog>
 
       {/* Folder picker dialog */}
-      <FolderPickerDialog
-        isOpen={showFolderPicker}
-        title="Select Bookmark Folder"
-        onSelect={handleFolderSelect}
-        onClose={() => setShowFolderPicker(false)}
-      />
+      {showFolderPicker && (
+        <FolderPickerDialog
+          isOpen
+          title="Select Bookmark Folder"
+          onSelect={handleFolderSelect}
+          onClose={() => setShowFolderPicker(false)}
+        />
+      )}
     </>
   );
 };

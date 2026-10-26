@@ -33,13 +33,13 @@ import {
   Calendar,
   Pin,
   X,
+  Minus,
   Volume2,
-  Copy,
   ExternalLink,
   SquareArrowOutUpRight,
   SquareStack,
-  ArrowRightFromLine,
-  Link
+  Link,
+  Sparkles
 } from 'lucide-react';
 import { getRandomGroupColor } from '../utils/groupColors';
 import { SpaceFolderIcon } from './SpaceFolderIcon';
@@ -58,6 +58,13 @@ import { useFindSpaceForFolder } from '../hooks/useFindSpaceForFolder';
 import { UndoableAction } from '../actions/types';
 import { DeleteBookmarkAction } from '../actions/deleteBookmarkAction';
 import { CloseTabAction } from '../actions/closeTabAction';
+import { CreateBookmarkFolderAction } from '../actions/createBookmarkFolderAction';
+import { resolveNewFolderParentId } from '../utils/newFolderSelection';
+import { resolveBookmarkRowVisualState } from '../utils/bookmarkRowVisualState';
+import {
+  getVisibleBookmarkChildren,
+  resolveBookmarkRowClickIntent,
+} from '../utils/bookmarkTreeVisibility';
 
 // Standard Chrome bookmark folder IDs
 const BOOKMARKS_BAR_ID = '1';
@@ -113,6 +120,7 @@ interface BookmarkRowProps {
   onCreateBookmark: (parentId: string) => void;
   onSort: (folderId: string, sortBy: SortOption) => void;
   onDuplicate: (id: string) => void;
+  onAiRename?: (node: chrome.bookmarks.BookmarkTreeNode) => void;
   onExpandAll?: (folderId: string) => void;
   onPin?: (url: string, title: string, faviconUrl?: string) => void;
   matchingSpace?: Space;  // Space that uses this folder as its bookmark folder
@@ -131,6 +139,7 @@ interface BookmarkRowProps {
   isSelected?: boolean;
   checkIsLoaded?: (bookmarkId: string) => boolean;
   checkIsAudible?: (bookmarkId: string) => boolean;
+  checkIsMuted?: (bookmarkId: string) => boolean;
   checkIsActive?: (bookmarkId: string) => boolean;
   getLiveTitle?: (bookmarkId: string) => string | undefined;
   onOpenBookmark?: (bookmarkId: string, url: string) => void;
@@ -139,7 +148,6 @@ interface BookmarkRowProps {
   onOpenAllTabs?: (folderId: string) => void;
   onOpenAllTabsInNewWindow?: (folderId: string) => void;
   onMoveToSpace?: (bookmarkId: string, isFolder: boolean) => void;
-  onMoveToTabs?: (bookmarkId: string) => void;
   onMoveBookmark?: (bookmarkId: string, isFolder: boolean) => void;
   getMatchingSpace?: (folderId: string) => Space | undefined;
   // External drop target (from tab drag)
@@ -163,6 +171,19 @@ interface BookmarkRowProps {
   onCloseSelectedBookmarks?: () => void;
   onCopyUrl?: (url: string) => void;
   onCopyUrls?: () => void;
+  onShareUrl?: (title: string, url: string) => void;
+  onShareSelectedBookmarks?: () => void;
+  onToggleBookmarkMuted?: (bookmarkId: string) => void;
+  onToggleSelectedBookmarksMuted?: () => void;
+  onDuplicateSelectedBookmarks?: () => void;
+  onCreateFolderWithSelectedBookmarks?: () => void;
+  onRemovePin?: (bookmarkId: string) => void;
+  onRemoveSelectedPins?: () => void;
+  isMuted?: boolean;
+  isActivePeek?: boolean;
+  allSelectedAreBookmarks?: boolean;
+  selectedLiveBookmarkCount?: number;
+  allSelectedLiveBookmarksMuted?: boolean;
   // Drag-drop attributes
   attributes?: DraggableAttributes;
   listeners?: SyntheticListenerMap;
@@ -182,6 +203,7 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
   onCreateBookmark,
   onSort,
   onDuplicate,
+  onAiRename,
   onExpandAll,
   onPin,
   matchingSpace,
@@ -203,7 +225,6 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
   onOpenAllTabs,
   onOpenAllTabsInNewWindow,
   onMoveToSpace,
-  onMoveToTabs,
   onMoveBookmark,
   externalDropTarget,
   onSelectionClick,
@@ -218,6 +239,19 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
   onCloseSelectedBookmarks,
   onCopyUrl,
   onCopyUrls,
+  onShareUrl,
+  onShareSelectedBookmarks,
+  onToggleBookmarkMuted,
+  onToggleSelectedBookmarksMuted,
+  onDuplicateSelectedBookmarks,
+  onCreateFolderWithSelectedBookmarks,
+  onRemovePin,
+  onRemoveSelectedPins,
+  isMuted,
+  isActivePeek,
+  allSelectedAreBookmarks,
+  selectedLiveBookmarkCount = 0,
+  allSelectedLiveBookmarksMuted,
   attributes,
   listeners,
   windowId,
@@ -225,6 +259,14 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
   const isFolder = !node.url;
   const dndId = `bookmark-${node.id}`;
   const isSpecialFolder = SPECIAL_FOLDER_IDS.includes(node.id);
+  const visualState = resolveBookmarkRowVisualState({
+    isActive: !!isActive,
+    isSelected: !!isSelected,
+    selectionCount: selectionCount ?? 0,
+  });
+  const activeCardIndentPx = visualState === 'active'
+    ? getIndentPadding(depth)
+    : undefined;
 
   const isBeingDragged = isMultiDrag ? isSelected : activeId === node.id;
   const isDropTarget = dropTargetId === node.id;
@@ -266,16 +308,27 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
       return;
     }
 
-    // Always update selection state on click
-    onSelectionClick?.(e);
+    const clickIntent = resolveBookmarkRowClickIntent(
+      isFolder,
+      e.metaKey || e.ctrlKey || e.shiftKey,
+    );
 
-    // For modifier clicks (Ctrl/Cmd/Shift), only update selection, don't perform action
-    if (e.metaKey || e.ctrlKey || e.shiftKey)
+    // 组合键点击文件夹或书签时，只更新多选状态，不触发折叠或打开页面。
+    if (clickIntent === 'select-only')
     {
+      onSelectionClick?.(e);
       return;
     }
 
-    // Plain click: perform action for bookmarks (folders only expand/collapse via chevron)
+    // Arc 的文件夹整行都是折叠入口，普通点击不把文件夹加入选择。
+    if (clickIntent === 'toggle-folder')
+    {
+      toggleFolder(node.id, !expandedState[node.id]);
+      return;
+    }
+
+    onSelectionClick?.(e);
+
     // Arc mode: open/activate bookmark on single click if setting enabled
     if (node.url && bookmarkOpenMode === 'arc' && onOpenBookmark && arcSingleClickOpensTab)
     {
@@ -300,7 +353,7 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
   };
 
   const icon = isFolder ? (
-    <SpaceFolderIcon space={matchingSpace} />
+    <SpaceFolderIcon space={matchingSpace} size={20} />
   ) : node.url ? (
     <img
       src={getFaviconUrl(node.url)}
@@ -370,16 +423,19 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
           <SquareArrowOutUpRight size={14} className="text-gray-700 dark:text-gray-200" />
         </button>
       )}
-      {/* Close button - always visible when tab is loaded (Arc-style only) */}
+      {/* 活跃项常显减号，其他已打开项仅在 hover 时显示。 */}
       {!isFolder && bookmarkOpenMode === 'arc' && isLoaded && onCloseBookmark && (
         <button
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onCloseBookmark(node.id); }}
-          className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded bg-white dark:bg-gray-900"
+          className={clsx(
+            "p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded bg-transparent transition-opacity",
+            visualState === 'active' ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          )}
           title="Close tab"
           aria-label="Close tab"
         >
-          <X size={14} className="text-gray-700 dark:text-gray-200" />
+          <Minus size={15} strokeWidth={2.25} className="text-gray-500 dark:text-gray-300" />
         </button>
       )}
     </div>
@@ -398,12 +454,17 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
             <TreeRow
               ref={ref}
               depth={depth}
-              title={bookmarkOpenMode === 'arc' && isLoaded && liveTitle ? liveTitle : node.title}
-              tooltip={node.url ? `${node.title}\n${node.url}` : undefined}
+              title={node.title}
+              tooltip={node.url
+                ? [node.title, liveTitle && liveTitle !== node.title ? liveTitle : undefined, node.url]
+                    .filter(Boolean)
+                    .join('\n')
+                : undefined}
               icon={combinedIcon}
               hasChildren={isFolder}
               isExpanded={expandedState[node.id]}
               onToggle={() => toggleFolder(node.id, !expandedState[node.id])}
+              hideChevronSlot
               onClick={handleRowClick}
               onDoubleClick={() => {
                 if (node.url && bookmarkOpenMode === 'arc' && onOpenBookmark) {
@@ -411,21 +472,30 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
                 }
               }}
               onContextMenu={() => onSelectionContextMenu?.()}
-              isActive={bookmarkOpenMode === 'arc' && isActive}
-              isSelected={isSelected}
-              isHighlighted={!isSelected && isOpen}
+              isActive={bookmarkOpenMode === 'arc' && visualState === 'active'}
+              isSelected={visualState === 'selected'}
+              isHighlighted={visualState === 'default' && isOpen}
               isDragging={isBeingDragged}
               disableHoverBorder={globalDragActive}
               dndAttributes={attributes}
               dndListeners={listeners}
               data-bookmark-id={node.id}
               data-is-folder={isFolder}
+              data-active-peek={isActivePeek || undefined}
               data-depth={depth}
               data-dnd-id={dndId}
               className={clsx(
                 showDropInto && "bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500",
                 !isSpecialFolder && "touch-none"
               )}
+              style={activeCardIndentPx === undefined
+                ? undefined
+                : {
+                    marginLeft: `${activeCardIndentPx}px`,
+                    width: `calc(100% - ${activeCardIndentPx + 4}px)`,
+                    paddingLeft: 0,
+                  }
+              }
               actions={actions}
               leadingIndicator={leadingIndicator}
             >
@@ -436,6 +506,35 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
             <ContextMenu.Content>
           {selectionCount && selectionCount > 1 ? (
             // Multi-selection menu
+            allSelectedAreBookmarks ? (
+            <>
+              <ContextMenu.Item onSelect={onCopyUrls}>
+                Copy Links
+              </ContextMenu.Item>
+              <ContextMenu.Item onSelect={onShareSelectedBookmarks}>
+                Share {selectionCount} Items...
+              </ContextMenu.Item>
+              {selectedLiveBookmarkCount > 0 && (
+                <ContextMenu.Item onSelect={onToggleSelectedBookmarksMuted}>
+                  {allSelectedLiveBookmarksMuted ? 'Unmute' : 'Mute'}
+                </ContextMenu.Item>
+              )}
+              <ContextMenu.Separator />
+              <ContextMenu.Item onSelect={onDuplicateSelectedBookmarks}>
+                Duplicate
+              </ContextMenu.Item>
+              <ContextMenu.Item onSelect={onMoveSelectedBookmarks}>
+                Move to...
+              </ContextMenu.Item>
+              <ContextMenu.Item onSelect={onCreateFolderWithSelectedBookmarks}>
+                New Folder with {selectionCount} Items
+              </ContextMenu.Item>
+              <ContextMenu.Separator />
+              <ContextMenu.Item danger onSelect={onRemoveSelectedPins}>
+                Remove Pins
+              </ContextMenu.Item>
+            </>
+            ) : (
             <>
               {hasSelectedBookmarks && onPin && (
                 <ContextMenu.Item onSelect={() => onPin(node.url || '', node.title, node.url ? getFaviconUrl(node.url) : undefined)}>
@@ -478,6 +577,7 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
                 </ContextMenu.Item>
               )}
             </>
+            )
           ) : (
             // Single-item menu
             <>
@@ -534,43 +634,41 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
           )}
           {!isFolder && node.url && (
             <>
-              {onPin && (
-                <ContextMenu.Item onSelect={() => onPin(node.url!, node.title, getFaviconUrl(node.url!))}>
-                  <Pin size={14} className="mr-2" /> Pin to Sidebar
+              <ContextMenu.Item onSelect={() => onCopyUrl?.(node.url!)}>
+                Copy Link
+              </ContextMenu.Item>
+              <ContextMenu.Item onSelect={() => onShareUrl?.(node.title, node.url!)}>
+                Share
+              </ContextMenu.Item>
+              {onAiRename && (
+                <ContextMenu.Item onSelect={() => onAiRename(node)}>
+                  <Sparkles size={14} className="mr-2" /> AI Rename
                 </ContextMenu.Item>
               )}
+              <ContextMenu.Item onSelect={() => onEdit(node)}>
+                Rename...
+              </ContextMenu.Item>
+              {isLoaded && (
+                <ContextMenu.Item onSelect={() => onToggleBookmarkMuted?.(node.id)}>
+                  {isMuted ? 'Unmute' : 'Mute'}
+                </ContextMenu.Item>
+              )}
+              <ContextMenu.Separator />
               <ContextMenu.Item onSelect={() => onDuplicate(node.id)}>
-                <Copy size={14} className="mr-2" /> Duplicate
+                Duplicate
               </ContextMenu.Item>
-              <ContextMenu.Item onSelect={() => onCopyUrl?.(node.url!)}>
-                <Link size={14} className="mr-2" /> Copy URL
-              </ContextMenu.Item>
-              <ContextMenu.Separator />
-              <ContextMenu.Item onSelect={() => onOpenInNewTabs?.(node.url!)}>
-                <ExternalLink size={14} className="mr-2" /> Open in New Tab
-              </ContextMenu.Item>
-              <ContextMenu.Item onSelect={() => onOpenInNewWindow?.(node.url!)}>
-                <ExternalLink size={14} className="mr-2" /> Open in New Window
-              </ContextMenu.Item>
-              <ContextMenu.Separator />
               {onMoveBookmark && (
                 <ContextMenu.Item onSelect={() => onMoveBookmark(node.id, false)}>
-                  <FolderInput size={14} className="mr-2" /> Move Bookmark...
+                  Move to...
                 </ContextMenu.Item>
               )}
-              {onMoveToSpace && (
-                <ContextMenu.Item onSelect={() => onMoveToSpace(node.id, false)}>
-                  <SquareStack size={14} className="mr-2" /> Move Bookmark to Space...
-                </ContextMenu.Item>
-              )}
-              {isLoaded && onMoveToTabs && (
-                <ContextMenu.Item onSelect={() => onMoveToTabs(node.id)}>
-                  <ArrowRightFromLine size={14} className="mr-2" /> Move To Tabs
-                </ContextMenu.Item>
-              )}
+              <ContextMenu.Separator />
+              <ContextMenu.Item danger onSelect={() => onRemovePin?.(node.id)}>
+                Remove Pin
+              </ContextMenu.Item>
             </>
           )}
-          {!isSpecialFolder && (
+          {isFolder && !isSpecialFolder && (
             <>
               <ContextMenu.Separator />
               <ContextMenu.Item onSelect={() => onEdit(node)}>
@@ -689,6 +787,7 @@ const BookmarkItem = (props: BookmarkRowProps) => {
     depth = 0,
     checkIsLoaded,
     checkIsAudible,
+    checkIsMuted,
     checkIsActive,
     getLiveTitle,
     getMatchingSpace,
@@ -703,6 +802,13 @@ const BookmarkItem = (props: BookmarkRowProps) => {
 
   // Compute matchingSpace for folders
   const matchingSpace = isFolder && getMatchingSpace ? getMatchingSpace(node.id) : undefined;
+  const visibleChildren = isFolder
+    ? getVisibleBookmarkChildren(
+        node,
+        !!expandedState[node.id],
+        (bookmarkId) => checkIsActive?.(bookmarkId) ?? false,
+      )
+    : [];
 
   return (
     <>
@@ -712,9 +818,9 @@ const BookmarkItem = (props: BookmarkRowProps) => {
         <StaticBookmarkRow ref={ref} {...props} matchingSpace={matchingSpace} />
       )}
 
-      {isFolder && expandedState[node.id] && node.children && (
+      {visibleChildren.length > 0 && (
         <div>
-          {node.children.map((child, childIndex) =>
+          {visibleChildren.map(({ node: child, isActivePeek }, childIndex) =>
           {
             const childIsFolder = !child.url;
             // Always create a selection item for child - use parent's getSelectionItem if available,
@@ -728,8 +834,10 @@ const BookmarkItem = (props: BookmarkRowProps) => {
                 {...props} // Pass through all handlers
                 node={child}
                 depth={depth + 1}
+                isActivePeek={isActivePeek}
                 isLoaded={checkIsLoaded ? checkIsLoaded(child.id) : false}
                 isAudible={checkIsAudible ? checkIsAudible(child.id) : false}
+                isMuted={checkIsMuted ? checkIsMuted(child.id) : false}
                 isActive={checkIsActive ? checkIsActive(child.id) : false}
                 liveTitle={getLiveTitle ? getLiveTitle(child.id) : undefined}
                 isSelected={checkIsSelected ? checkIsSelected(child.id) : false}
@@ -765,11 +873,13 @@ interface BookmarkTreeProps {
   onShowToast?: (message: string) => void;
   onPerformAction?: (action: UndoableAction) => Promise<void>;
   useSpaces?: boolean;
+  onAiRename?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
+  onBookmarkCreated?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
 }
 
-export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false, externalDropTarget, bookmarkOpenMode = 'arc', arcSingleClickOpensTab = true, onResolverReady, filterLiveTabs = false, filterText = '', activeSpace, onShowToast, onPerformAction, useSpaces = true }: BookmarkTreeProps) => {
+export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false, externalDropTarget, bookmarkOpenMode = 'arc', arcSingleClickOpensTab = true, onResolverReady, filterLiveTabs = false, filterText = '', activeSpace, onShowToast, onPerformAction, useSpaces = true, onAiRename, onBookmarkCreated }: BookmarkTreeProps) => {
   const { bookmarks, updateBookmark, createFolder, createBookmark, sortBookmarks, moveBookmark, duplicateBookmark, findFolderBySegments, getAllBookmarksInFolder, getBookmarkSegments, getBookmark, error } = useBookmarks();
-  const { openBookmarkTab, closeBookmarkTab, isBookmarkLoaded, isBookmarkAudible, isBookmarkActive, getBookmarkLiveTitle, deassociateBookmarkTab, getTabIdForBookmark, getItemKeyForTab, restoreItemAssociation, associateExistingTab } = useBookmarkTabsContext();
+  const { openBookmarkTab, closeBookmarkTab, isBookmarkLoaded, isBookmarkAudible, isBookmarkMuted, isBookmarkActive, getBookmarkLiveTitle, deassociateBookmarkTab, getTabIdForBookmark, getItemKeyForTab, restoreItemAssociation, associateExistingTab } = useBookmarkTabsContext();
   const { spaces, updateSpace, updateSpaceFolderPaths, windowId } = useSpacesContext();
   const findSpaceForFolder = useFindSpaceForFolder(getBookmarkSegments, spaces);
 
@@ -980,6 +1090,10 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
   }, [updateBookmark, editingNode, spaces, getBookmarkSegments, updateSpaceFolderPaths]);
 
   const [creatingFolderParentId, setCreatingFolderParentId] = useState<string | null>(null);
+  const [folderSelectionToCreate, setFolderSelectionToCreate] = useState<{
+    parentId: string;
+    bookmarkIds: string[];
+  } | null>(null);
   const [creatingBookmarkParentId, setCreatingBookmarkParentId] = useState<string | null>(null);
   const [showSpaceFolderPicker, setShowSpaceFolderPicker] = useState(false);
   const [moveToSpaceDialog, setMoveToSpaceDialog] = useState<{
@@ -1025,10 +1139,16 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
         });
       }
 
-      // Include children if folder is expanded (even for special folders)
-      if (isFolder && isExpanded && node.children)
+      if (isFolder)
       {
-        for (const child of node.children)
+        const visibleChildren = getVisibleBookmarkChildren(
+          node,
+          isExpanded,
+          isBookmarkActive,
+        );
+
+        // 折叠文件夹只加入活跃后代；展开文件夹仍按原树结构递归加入直接子节点。
+        for (const { node: child } of visibleChildren)
         {
           flattenNode(child, !!expandedState[child.id]);
         }
@@ -1041,7 +1161,7 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
     }
 
     return items;
-  }, [visibleBookmarks, expandedState]);
+  }, [visibleBookmarks, expandedState, isBookmarkActive]);
 
   // Get items in range for shift-click selection
   const getBookmarkItemsInRange = useCallback((startIndex: number, endIndex: number): SelectionItem[] =>
@@ -1648,6 +1768,185 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
     }
   }, [getTabIdForBookmark, duplicateBookmark]);
 
+  /** 返回按侧边栏顺序排列的已选固定 Tab。 */
+  const getSelectedBookmarkItems = useCallback((): SelectionItem[] =>
+  {
+    return getSelectedItems()
+      .filter(item => item.type === 'bookmark')
+      .sort((a, b) => a.index - b.index);
+  }, [getSelectedItems]);
+
+  const allSelectedItemsAreBookmarks = useCallback((): boolean =>
+  {
+    const selectedItems = getSelectedItems();
+    return selectedItems.length > 0 && selectedItems.every(item => item.type === 'bookmark');
+  }, [getSelectedItems]);
+
+  const getSelectedLiveBookmarkIds = useCallback((): string[] =>
+  {
+    return getSelectedBookmarkItems()
+      .map(item => item.id)
+      .filter(bookmarkId => getTabIdForBookmark(bookmarkId) !== undefined);
+  }, [getSelectedBookmarkItems, getTabIdForBookmark]);
+
+  const allSelectedLiveBookmarksAreMuted = useCallback((): boolean =>
+  {
+    const bookmarkIds = getSelectedLiveBookmarkIds();
+    return bookmarkIds.length > 0 && bookmarkIds.every(isBookmarkMuted);
+  }, [getSelectedLiveBookmarkIds, isBookmarkMuted]);
+
+  /** 优先使用系统分享面板；当前平台不支持时退化为复制链接。 */
+  const shareLinks = useCallback(async (
+    title: string,
+    urls: string[],
+    singleUrl?: string
+  ): Promise<void> =>
+  {
+    if (navigator.share)
+    {
+      try
+      {
+        await navigator.share({
+          title,
+          text: urls.length > 1 ? urls.join('\n') : undefined,
+          url: singleUrl,
+        });
+        return;
+      }
+      catch (error)
+      {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+      }
+    }
+
+    await navigator.clipboard.writeText(urls.join('\n'));
+    onShowToast?.(urls.length === 1 ? 'Link copied' : `${urls.length} links copied`);
+  }, [onShowToast]);
+
+  const handleShareBookmark = useCallback((title: string, url: string) =>
+  {
+    return shareLinks(title, [url], url);
+  }, [shareLinks]);
+
+  const handleShareSelectedBookmarks = useCallback(async () =>
+  {
+    const nodes = getSelectedBookmarkItems()
+      .map(item => findNode(item.id))
+      .filter((node): node is chrome.bookmarks.BookmarkTreeNode => !!node?.url);
+    await shareLinks(`${nodes.length} links`, nodes.map(node => node.url!));
+  }, [getSelectedBookmarkItems, findNode, shareLinks]);
+
+  const handleToggleBookmarkMuted = useCallback(async (bookmarkId: string) =>
+  {
+    const tabId = getTabIdForBookmark(bookmarkId);
+    if (tabId === undefined) return;
+    await chrome.tabs.update(tabId, { muted: !isBookmarkMuted(bookmarkId) });
+  }, [getTabIdForBookmark, isBookmarkMuted]);
+
+  const handleToggleSelectedBookmarksMuted = useCallback(async () =>
+  {
+    const bookmarkIds = getSelectedLiveBookmarkIds();
+    const shouldMute = !bookmarkIds.every(isBookmarkMuted);
+    await Promise.all(bookmarkIds.map(async (bookmarkId) =>
+    {
+      const tabId = getTabIdForBookmark(bookmarkId);
+      if (tabId !== undefined)
+      {
+        await chrome.tabs.update(tabId, { muted: shouldMute });
+      }
+    }));
+  }, [getSelectedLiveBookmarkIds, getTabIdForBookmark, isBookmarkMuted]);
+
+  const handleDuplicateSelectedBookmarks = useCallback(async () =>
+  {
+    for (const item of getSelectedBookmarkItems())
+    {
+      await handleDuplicateBookmark(item.id);
+    }
+    clearSelection();
+  }, [getSelectedBookmarkItems, handleDuplicateBookmark, clearSelection]);
+
+  /** 删除固定项但保留已经打开的页面，使 Remove Pin 与 Arc 的行为一致。 */
+  const removePins = useCallback(async (bookmarkIds: string[]) =>
+  {
+    for (const bookmarkId of bookmarkIds)
+    {
+      await deassociateBookmarkTab(bookmarkId);
+    }
+
+    const action = new DeleteBookmarkAction(bookmarkIds);
+    if (onPerformAction)
+    {
+      await onPerformAction(action);
+    }
+    else
+    {
+      await action.do();
+    }
+  }, [deassociateBookmarkTab, onPerformAction]);
+
+  const handleRemovePin = useCallback(async (bookmarkId: string) =>
+  {
+    await removePins([bookmarkId]);
+  }, [removePins]);
+
+  const handleRemoveSelectedPins = useCallback(async () =>
+  {
+    await removePins(getSelectedBookmarkItems().map(item => item.id));
+    clearSelection();
+  }, [removePins, getSelectedBookmarkItems, clearSelection]);
+
+  const openCreateFolderWithSelectedBookmarks = useCallback(() =>
+  {
+    const selectedItems = getSelectedBookmarkItems();
+    const selectedNodes = selectedItems
+      .map(item => findNode(item.id))
+      .filter((node): node is chrome.bookmarks.BookmarkTreeNode => !!node?.url);
+    const parentId = resolveNewFolderParentId(selectedNodes, spaceFolder?.id ?? null);
+
+    if (!parentId || selectedNodes.length === 0)
+    {
+      onShowToast?.('Unable to determine the new folder location');
+      return;
+    }
+
+    setFolderSelectionToCreate({
+      parentId,
+      bookmarkIds: selectedNodes.map(node => node.id),
+    });
+  }, [getSelectedBookmarkItems, findNode, spaceFolder?.id, onShowToast]);
+
+  const handleCreateFolderWithSelectedBookmarks = useCallback(async (
+    parentId: string,
+    title: string
+  ) =>
+  {
+    if (!folderSelectionToCreate) return;
+
+    const action = new CreateBookmarkFolderAction(
+      parentId,
+      title,
+      folderSelectionToCreate.bookmarkIds,
+      regroupAssociatedTab,
+      (folderId) =>
+      {
+        setExpandedState(prev => ({ ...prev, [parentId]: true, [folderId]: true }));
+      }
+    );
+
+    if (onPerformAction)
+    {
+      await onPerformAction(action);
+    }
+    else
+    {
+      await action.do();
+    }
+
+    clearSelection();
+    setFolderSelectionToCreate(null);
+  }, [folderSelectionToCreate, regroupAssociatedTab, onPerformAction, clearSelection]);
+
   // Close tabs for all selected bookmarks (undoable as a single batch action)
   const handleCloseSelectedBookmarks = useCallback(() =>
   {
@@ -1884,6 +2183,10 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
               {
                 await associateExistingTab(item.tab.tabId, result.node.id, targetSpace?.id);
               }
+              if (result.node)
+              {
+                onBookmarkCreated?.(result.node, item.tab?.tabId);
+              }
               if (index !== undefined) index++;
             }
           }
@@ -1951,7 +2254,7 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
     }
   }, [bookmarks, spaceFolder, getSelectedItems, moveBookmark, expandedState, setExpandedState,
     clearSelection, setWasValidDrop, getBookmark, createBookmark, associateExistingTab,
-    findSpaceForFolder]);
+    findSpaceForFolder, onBookmarkCreated]);
 
   // Register drop handler
   useEffect(() =>
@@ -2079,12 +2382,14 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
             Pick new folder
           </button>
         </div>
-        <FolderPickerDialog
-          isOpen={showSpaceFolderPicker}
-          title="Select Bookmark Folder"
-          onSelect={handleSpaceFolderSelected}
-          onClose={() => setShowSpaceFolderPicker(false)}
-        />
+        {showSpaceFolderPicker && (
+          <FolderPickerDialog
+            isOpen
+            title="Select Bookmark Folder"
+            onSelect={handleSpaceFolderSelected}
+            onClose={() => setShowSpaceFolderPicker(false)}
+          />
+        )}
       </>
     );
   }
@@ -2113,6 +2418,9 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
               onCreateBookmark={handleCreateBookmark}
               onSort={sortBookmarks}
               onDuplicate={handleDuplicateBookmark}
+              onAiRename={onAiRename
+                ? (bookmark) => onAiRename(bookmark, getTabIdForBookmark(bookmark.id))
+                : undefined}
               onExpandAll={handleExpandAll}
               onPin={handlePinSelectedBookmarks}
               globalDragActive={!!unifiedActiveId}
@@ -2124,11 +2432,13 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
               arcSingleClickOpensTab={arcSingleClickOpensTab}
               isLoaded={isBookmarkLoaded(node.id)}
               isAudible={isBookmarkAudible(node.id)}
+              isMuted={isBookmarkMuted(node.id)}
               isActive={isBookmarkActive(node.id)}
               liveTitle={getBookmarkLiveTitle(node.id)}
               isSelected={isBookmarkSelected(node.id)}
               checkIsLoaded={isBookmarkLoaded}
               checkIsAudible={isBookmarkAudible}
+              checkIsMuted={isBookmarkMuted}
               checkIsActive={isBookmarkActive}
               getLiveTitle={getBookmarkLiveTitle}
               onOpenBookmark={(bookmarkId, url) => openBookmarkTab(bookmarkId, url, activeSpace?.id)}
@@ -2137,7 +2447,6 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
               onOpenAllTabs={handleOpenAllTabs}
               onOpenAllTabsInNewWindow={handleOpenAllTabsInNewWindow}
               onMoveToSpace={useSpaces ? openMoveToSpaceDialog : undefined}
-              onMoveToTabs={deassociateBookmarkTab}
               onMoveBookmark={openMoveBookmarkDialog}
               getMatchingSpace={getMatchingSpace}
               externalDropTarget={effectiveExternalDropTarget}
@@ -2161,6 +2470,17 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
               onCloseSelectedBookmarks={handleCloseSelectedBookmarks}
               onCopyUrl={handleCopyUrl}
               onCopyUrls={handleCopyUrls}
+              onShareUrl={handleShareBookmark}
+              onShareSelectedBookmarks={handleShareSelectedBookmarks}
+              onToggleBookmarkMuted={handleToggleBookmarkMuted}
+              onToggleSelectedBookmarksMuted={handleToggleSelectedBookmarksMuted}
+              onDuplicateSelectedBookmarks={handleDuplicateSelectedBookmarks}
+              onCreateFolderWithSelectedBookmarks={openCreateFolderWithSelectedBookmarks}
+              onRemovePin={handleRemovePin}
+              onRemoveSelectedPins={handleRemoveSelectedPins}
+              allSelectedAreBookmarks={allSelectedItemsAreBookmarks()}
+              selectedLiveBookmarkCount={getSelectedLiveBookmarkIds().length}
+              allSelectedLiveBookmarksMuted={allSelectedLiveBookmarksAreMuted()}
               windowId={windowId ?? undefined}
             />
           );
@@ -2227,6 +2547,13 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
         onClose={() => setCreatingFolderParentId(null)}
       />
 
+      <BookmarkCreateFolderModal
+        isOpen={folderSelectionToCreate !== null}
+        parentId={folderSelectionToCreate?.parentId ?? null}
+        onSave={handleCreateFolderWithSelectedBookmarks}
+        onClose={() => setFolderSelectionToCreate(null)}
+      />
+
       <SpaceNavigatorDialog
         isOpen={moveToSpaceDialog.isOpen}
         onClose={closeMoveToSpaceDialog}
@@ -2235,27 +2562,30 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
           : moveToSpaceDialog.isFolder
             ? "Move Folder to Space"
             : "Move Bookmark to Space"}
-        hideAllSpace
         excludeSpaceId={activeSpace?.id}
         requireBookmarkFolder
         onSelectSpace={handleMoveBookmarkToSpace}
         showCurrentIndicator={false}
       />
 
-      <FolderPickerDialog
-        isOpen={moveBookmarkDialog.isOpen}
-        title={moveBookmarkDialog.isFolder ? "Move Folder to..." : "Move Bookmark to..."}
-        onSelect={handleMoveBookmarkToFolder}
-        onClose={closeMoveBookmarkDialog}
-        defaultFolderId={moveBookmarkDialog.parentFolderId ?? undefined}
-      />
+      {moveBookmarkDialog.isOpen && (
+        <FolderPickerDialog
+          isOpen
+          title={moveBookmarkDialog.isFolder ? "Move Folder to..." : "Move Bookmark to..."}
+          onSelect={handleMoveBookmarkToFolder}
+          onClose={closeMoveBookmarkDialog}
+          defaultFolderId={moveBookmarkDialog.parentFolderId ?? undefined}
+        />
+      )}
 
-      <FolderPickerDialog
-        isOpen={moveMultiBookmarkDialog.isOpen}
-        title="Move to..."
-        onSelect={handleMoveSelectedBookmarksToFolder}
-        onClose={() => setMoveMultiBookmarkDialog({ isOpen: false })}
-      />
+      {moveMultiBookmarkDialog.isOpen && (
+        <FolderPickerDialog
+          isOpen
+          title="Move to..."
+          onSelect={handleMoveSelectedBookmarksToFolder}
+          onClose={() => setMoveMultiBookmarkDialog({ isOpen: false })}
+        />
+      )}
 
     </>
   );

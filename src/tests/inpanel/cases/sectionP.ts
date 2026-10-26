@@ -444,7 +444,13 @@ function deletePins(pinRefs: string[], actionRef: string): TestStep
     run: async (ctx) =>
     {
       const pinIds = pinRefs.map(ref => resolveStringRef(ctx, ref));
-      const action = new DeletePinnedSiteAction(pinIds, () => mirrorPins(), ctx.getTabIdForPinned);
+      const action = new DeletePinnedSiteAction(
+        pinIds,
+        () => mirrorPins(),
+        ctx.getTabIdForPinned,
+        ctx.deassociatePinnedTab,
+        ctx.restoreItemAssociation
+      );
       await action.do();
       ctx.refs.set(actionRef, action);
     },
@@ -468,24 +474,25 @@ function undoPinDelete(actionRef: string): TestStep
   };
 }
 
-/** Assert a tab is gone, for the "delete closes the pin's tab" step. */
-function assertTabClosed(tabRef: string): TestStep
+/** Assert Unpin leaves the real Chrome Tab open. */
+function assertTabOpen(tabRef: string): TestStep
 {
   return {
     kind: 'assert',
-    label: `Tab "${tabRef}" is closed`,
+    label: `Tab "${tabRef}" remains open`,
     run: async (ctx) =>
     {
       const tabId = resolveTabId(ctx, tabRef);
       try
       {
-        await chrome.tabs.get(tabId);
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.id === tabId) return;
       }
       catch
       {
-        return;  // gone, which is what we want
+        // fall through to the assertion below
       }
-      throw new Error(`tab ${tabId} is still open - deleting its pin should have closed it`);
+      throw new Error(`tab ${tabId} was closed - Unpin should leave it as an unmanaged tab`);
     },
   };
 }
@@ -517,15 +524,14 @@ export const P3_DELETE_AND_UNDO_RESTORES_POSITION: TestCase = {
     undoPinDelete('deleteTwo'),
     assertTestPinOrder(['pinOne', 'pinTwo', 'pinThree', 'pinFour']),
 
-    // A pin with a live tab: do() closes the tab, undo() restores pin data
-    // only and must NOT reopen it.
+    // A Favorite with a live tab: Unpin keeps the Tab open; undo restores its association.
     openPinnedTab({ pinRef: 'pinFour', url: testUrl('p3-four'), tabRef: 'tabFour' }),
     deletePins(['pinFour'], 'deleteThree'),
     assertPinPresent('pinFour', false),
-    assertTabClosed('tabFour'),
+    assertTabOpen('tabFour'),
     undoPinDelete('deleteThree'),
     assertTestPinOrder(['pinOne', 'pinTwo', 'pinThree', 'pinFour']),
-    assertTabClosed('tabFour'),
+    assertTabOpen('tabFour'),
   ],
 };
 

@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { Space, ALL_SPACE } from '../utils/spaceMessages';
+import { Space } from '../utils/spaceMessages';
 import { SpaceList, useSpaceListKeyboard, useSpaceListHighlight } from './SpaceList';
 import { spaceWindowStateProxy } from '../managers/proxies/spaceWindowStateProxy';
 import { spaceManagerProxy } from '../managers/proxies/spaceManagerProxy';
+import { resolveActiveSpaceId } from '../utils/spaceSelection';
 
 export const SpaceNavigatorApp = () =>
 {
   const [spaces, setSpaces] = useState<Space[]>([]);
-  const [activeSpaceId, setActiveSpaceId] = useState<string>(ALL_SPACE.id);
+  const [activeSpaceId, setActiveSpaceId] = useState<string>('');
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -21,29 +22,29 @@ export const SpaceNavigatorApp = () =>
   // Load spaces and current active space from background on mount
   useEffect(() =>
   {
-    spaceManagerProxy.getSpaces().then((loadedSpaces) =>
+    Promise.all([
+      spaceManagerProxy.getSpaces(),
+      spaceWindowStateProxy.getState(windowId),
+    ]).then(([loadedSpaces, state]) =>
     {
+      const resolvedSpaceId = resolveActiveSpaceId(loadedSpaces, state.activeSpaceId);
       setSpaces(loadedSpaces);
-    }).catch((error) =>
-    {
-      console.error('Failed to get spaces:', error);
-    });
+      setActiveSpaceId(resolvedSpaceId ?? '');
 
-    spaceWindowStateProxy.getState(windowId).then((state) =>
-    {
-      setActiveSpaceId(state.activeSpaceId);
+      // 快捷导航打开时顺便迁移旧的 all 状态，后续入口只处理真实 Space。
+      if (resolvedSpaceId && resolvedSpaceId !== state.activeSpaceId)
+      {
+        void spaceWindowStateProxy.setActiveSpace(windowId, resolvedSpaceId);
+      }
     }).catch((error) =>
     {
-      console.error('Failed to get window state:', error);
+      console.error('Failed to load spaces/window state:', error);
     });
   }, [windowId]);
 
-  // All = index 0, named spaces = index 1..N
-  const allSpaces = useMemo(() => [ALL_SPACE, ...spaces], [spaces]);
-
   // Highlight the active space once spaces are loaded
   useSpaceListHighlight({
-    spaces: allSpaces,
+    spaces,
     activeSpaceId,
     setHighlightedIndex,
     itemRefs,
@@ -55,14 +56,13 @@ export const SpaceNavigatorApp = () =>
     spaceWindowStateProxy.setActiveSpace(windowId, spaceId).then(() => window.close());
   }, [windowId]);
 
-  // displaySpaces is the search-filtered subset of allSpaces
+  // displaySpaces is the search-filtered subset of spaces
   const { filteredSpaces: displaySpaces, searchQuery, onSearchChange, searchInputRef } = useSpaceListKeyboard({
-    spaces: allSpaces,
+    spaces,
     highlightedIndex,
     setHighlightedIndex,
     onSelect: handleSelect,
     itemRefs,
-    firstKeyIsZero: true,
     onEscape: window.close,
   });
 
@@ -78,7 +78,6 @@ export const SpaceNavigatorApp = () =>
           spaces={displaySpaces}
           highlightedIndex={highlightedIndex}
           activeSpaceId={activeSpaceId}
-          firstKeyIsZero={true}
           searchQuery={searchQuery}
           onSearchChange={onSearchChange}
           searchInputRef={searchInputRef}

@@ -19,7 +19,7 @@ export interface Space
   bookmarkFolderSegments?: string[];      // structured path e.g. ["Bookmarks Bar", "A/B"] - unambiguous
 }
 
-// Special "All" space - not stored, always prepended to allSpaces at runtime
+// 仅用于读取旧 session 和“尚未创建 Space”的内部空状态，不再渲染为可见 Space。
 export const ALL_SPACE: Space = {
   id: 'all',
   name: 'All',

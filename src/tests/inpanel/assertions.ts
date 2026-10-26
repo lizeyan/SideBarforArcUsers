@@ -216,6 +216,24 @@ export function assertBookmarkRowExists(tabRef: string, expected: boolean): Test
   };
 }
 
+/** 确认受管理的书签/Favorite Tab 不会重复出现在 Tabs 区域。 */
+export function assertTabListRowExists(tabRef: string, expected: boolean): TestStep
+{
+  return {
+    kind: 'assert',
+    label: `Tab "${tabRef}" ${expected ? 'appears' : 'does not appear'} in Tabs`,
+    run: async (ctx) =>
+    {
+      const tabId = resolveTabId(ctx, tabRef);
+      const exists = document.querySelector(`[data-tab-id="${tabId}"]`) !== null;
+      if (exists !== expected)
+      {
+        throw new Error(`expected Tabs row for tab ${tabId} to ${expected ? 'exist' : 'be absent'}`);
+      }
+    },
+  };
+}
+
 /**
  * Confirms a tab's sidebar row is (or isn't) within the visible bounds of
  * the sidebar's scroll container - the real DOM effect of scrollHelpers.ts's

@@ -1,10 +1,14 @@
-import React from 'react';
-import { SpaceEditDialog } from './SpaceEditDialog';
+import React, { Suspense } from 'react';
 import { SpaceDeleteDialog } from './SpaceDeleteDialog';
 import { Space, useSpacesContext } from '../contexts/SpacesContext';
 import { UndoableAction } from '../actions/types';
 import { DeleteSpaceAction } from '../actions/deleteSpaceAction';
 import { useBookmarkTabsContext } from '../contexts/BookmarkTabsContext';
+import { resolveSpaceIdAfterDeletion } from '../utils/spaceSelection';
+
+const SpaceEditDialog = React.lazy(() =>
+  import('./SpaceEditDialog').then(module => ({ default: module.SpaceEditDialog }))
+);
 
 interface SpaceDialogsProps
 {
@@ -29,7 +33,7 @@ export const SpaceDialogs: React.FC<SpaceDialogsProps> = ({
   onPerformAction,
 }) =>
 {
-  const { spaces, createSpace, updateSpace, setActiveSpaceId, windowId } = useSpacesContext();
+  const { spaces, activeSpaceId, createSpace, updateSpace, setActiveSpaceId, windowId } = useSpacesContext();
   const { getItemKeyForTab, restoreItemAssociation } = useBookmarkTabsContext();
 
   const handleSaveSpace = async (spaceData: {
@@ -64,6 +68,15 @@ export const SpaceDialogs: React.FC<SpaceDialogsProps> = ({
   {
     if (!spaceToDelete || !windowId) return;
 
+    const nextSpaceId = resolveSpaceIdAfterDeletion(
+      spaces,
+      spaceToDelete.id,
+      activeSpaceId,
+    );
+
+    // Arc 始终保留至少一个 Space；最后一个 Space 不允许被删除。
+    if (!nextSpaceId) return;
+
     const action = new DeleteSpaceAction(
       spaceToDelete.id,
       () => spaces,
@@ -79,19 +92,25 @@ export const SpaceDialogs: React.FC<SpaceDialogsProps> = ({
     {
       action.do();
     }
-    // Switch to "All" space after deletion
-    setActiveSpaceId('all');
+    if (activeSpaceId === spaceToDelete.id)
+    {
+      setActiveSpaceId(nextSpaceId);
+    }
   };
 
   return (
     <>
-      <SpaceEditDialog
-        isOpen={showEditDialog}
-        space={spaceToEdit}
-        existingSpaces={spaces}
-        onClose={onCloseEditDialog}
-        onSave={handleSaveSpace}
-      />
+      {showEditDialog && (
+        <Suspense fallback={null}>
+          <SpaceEditDialog
+            isOpen
+            space={spaceToEdit}
+            existingSpaces={spaces}
+            onClose={onCloseEditDialog}
+            onSave={handleSaveSpace}
+          />
+        </Suspense>
+      )}
 
       <SpaceDeleteDialog
         isOpen={showDeleteDialog}

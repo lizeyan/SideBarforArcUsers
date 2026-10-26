@@ -1,6 +1,6 @@
 import { SpaceMessageAction, Space } from './utils/spaceMessages';
 import { FOLLOW_ACTIVE_TAB_KEY, parseFollowActiveTabMode } from './utils/followActiveTab';
-import { isPinnedManagedTab, getTabAssociations, saveTabAssociationBackup, removeTabAssociationBackup, updateTabAssociationBackupIndices, removeWindowAssociationBackup, restoreTabAssociationBackup } from './utils/tabAssociations';
+import { getTabAssociations, saveTabAssociationBackup, removeTabAssociationBackup, updateTabAssociationBackupIndices, removeWindowAssociationBackup, restoreTabAssociationBackup, WAIT_FOR_TAB_ASSOCIATIONS_READY } from './utils/tabAssociations';
 import { toChromeColor } from './utils/groupColors';
 import { fetchFaviconAsBase64, getFaviconUrl } from './utils/favicon';
 import { parseManagerActionId, RoutedManager } from './managers/proxies/messageRouting';
@@ -10,6 +10,9 @@ import { SpaceManager } from './managers/impl/spaceManager';
 import { TabHistoryManager } from './managers/impl/tabHistoryManager';
 import { LastAudibleTracker } from './managers/impl/lastAudibleTracker';
 import { PinnedSitesManager } from './managers/impl/pinnedSitesManager';
+import { TabAssociationReadiness } from './utils/tabAssociationReadiness';
+import { resolveTrackedTabGroupMove } from './utils/trackedTabGroupMove';
+import { resolveActiveSpaceId } from './utils/spaceSelection';
 
 // Set side panel to open when clicking the extension toolbar button
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -158,15 +161,8 @@ async function findSpaceByName(name: string | undefined): Promise<Space | undefi
 let tabSpaceRegistry: TabSpaceRegistry;
 
 // Get space ID for a tab at navigation time
-// Priority: pinned check > live Chrome group > tab registry > 'all' for ungrouped
-// Returns undefined for pinned tabs (don't switch space)
-//
-// Pinned-site tabs are checked first and unconditionally excluded: pins live in
-// the global pinned bar, not any one space's bookmark folder, and are meant to
-// stay reachable without a space switch even if the underlying tab gets dragged
-// into a space's Chrome group.
-//
-// The Chrome group is checked next because it's the tab's current ground
+// Priority: live Chrome group > tab registry > 'all' for ungrouped.
+// The Chrome group is checked first because it's the tab's current ground
 // truth. The registry is a cache written once when an Arc-style bookmark tab
 // is created (see TabSpaceRegistry.register, reached via the proxy) and nothing updates
 // it if the tab is later moved to a different group - so it can only be
@@ -174,8 +170,6 @@ let tabSpaceRegistry: TabSpaceRegistry;
 // after a bookmark tab is created before auto-grouping completes).
 async function getSpaceForTab(windowId: number, tabId: number): Promise<string | undefined>
 {
-  if (await isPinnedManagedTab(windowId, tabId)) return undefined;
-
   try
   {
     const tab = await chrome.tabs.get(tabId);
@@ -228,12 +222,27 @@ async function setActiveTabAndSpace(
       return { success: false, error: 'Tab has no window' };
     }
 
-    // Switch the sidebar to the tab's space (unless in "All" space, where every
-    // tab is already visible)
-    const destinationSpaceId = await getSpaceForTab(tab.windowId, tabId);
-    const currentSpaceId = spaceStateManager.getActiveSpace(tab.windowId);
+    // 显式跳转始终跟随目标 Tab 的真实 Space。
+    const persistedSpaceId = spaceStateManager.getActiveSpace(tab.windowId);
+    const currentSpaceId = resolveActiveSpaceId(spaceManager.getSpaces(), persistedSpaceId);
+    let destinationSpaceId = await getSpaceForTab(tab.windowId, tabId);
+
+    if (currentSpaceId && currentSpaceId !== persistedSpaceId)
+    {
+      spaceStateManager.setActiveSpace(tab.windowId, currentSpaceId);
+    }
+
+    if (!destinationSpaceId &&
+        currentSpaceId &&
+        tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE)
+    {
+      // 已经活跃的遗留未分组 Tab 不会再触发 onActivated，这里直接补入当前 Space。
+      queueTabForGrouping(tab, currentSpaceId);
+      destinationSpaceId = currentSpaceId;
+    }
+
     let spaceSwitched = false;
-    if (destinationSpaceId && currentSpaceId !== 'all' && currentSpaceId !== destinationSpaceId)
+    if (destinationSpaceId && persistedSpaceId !== destinationSpaceId)
     {
       spaceStateManager.setActiveSpace(tab.windowId, destinationSpaceId);
       spaceSwitched = true;
@@ -283,10 +292,32 @@ const lastAudibleTracker = new LastAudibleTracker(historyManager);
 tabSpaceRegistry = new TabSpaceRegistry();
 const newsVersionChecker = new NewsVersionChecker();
 
+/**
+ * 后台启动时迁移每个窗口遗留的 all 或失效 Space ID。
+ * 这一步在 stateReady 之前完成，避免侧边栏未打开时创建的新 Tab 失去归属。
+ */
+async function normalizeLoadedWindowSpaces(): Promise<void>
+{
+  const spaces = spaceManager.getSpaces();
+  if (spaces.length === 0) return;
+
+  const windows = await chrome.windows.getAll();
+  for (const window of windows)
+  {
+    if (window.id === undefined) continue;
+    const currentSpaceId = spaceStateManager.getActiveSpace(window.id);
+    const resolvedSpaceId = resolveActiveSpaceId(spaces, currentSpaceId);
+    if (resolvedSpaceId && resolvedSpaceId !== currentSpaceId)
+    {
+      spaceStateManager.setActiveSpace(window.id, resolvedSpaceId);
+    }
+  }
+}
+
 // Promise that resolves when all state managers have loaded.
 // Event handlers must await this before accessing state to prevent race conditions
 // when the service worker restarts after being idle.
-let stateReadyResolve: () => void;
+let stateReadyResolve!: () => void;
 const stateReady = new Promise<void>((resolve) =>
 {
   stateReadyResolve = resolve;
@@ -294,8 +325,8 @@ const stateReady = new Promise<void>((resolve) =>
   setTimeout(resolve, 1000);
 });
 
-// Load persisted state
-Promise.all([
+// 固定 Tab 关联必须在 manager 数据加载后恢复；Side Panel 会显式等待这一就绪点。
+const managerLoadPromise = Promise.all([
   spaceStateManager.load(),
   spaceManager.load(),
   historyManager.load(),
@@ -304,11 +335,15 @@ Promise.all([
   pinnedSitesManager.load(),
   tabSpaceRegistry.load(),
   newsVersionChecker.load()
-]).then(() =>
-{
-  stateReadyResolve();
-  restoreTabAssociationBackup();
-});
+]).then(normalizeLoadedWindowSpaces);
+
+const tabAssociationReadiness = new TabAssociationReadiness(
+  () => managerLoadPromise,
+  restoreTabAssociationBackup,
+  (error) => console.error('[TabAssociationReadiness] initialization failed:', error)
+);
+
+tabAssociationReadiness.wait().then(stateReadyResolve);
 
 // =============================================================================
 // Event Listeners
@@ -336,8 +371,30 @@ chrome.tabs.onActivated.addListener(async (activeInfo) =>
     historyManager.push(activeInfo.windowId, activeInfo.tabId);
   }
 
+  const persistedSpaceId = spaceStateManager.getActiveSpace(activeInfo.windowId);
+  const currentSpaceId = resolveActiveSpaceId(spaceManager.getSpaces(), persistedSpaceId);
+  if (currentSpaceId && currentSpaceId !== persistedSpaceId)
+  {
+    spaceStateManager.setActiveSpace(activeInfo.windowId, currentSpaceId);
+  }
+
   // Lookup destination space for sidebar switch
-  const destinationSpaceId = await getSpaceForTab(activeInfo.windowId, activeInfo.tabId);
+  let destinationSpaceId = await getSpaceForTab(activeInfo.windowId, activeInfo.tabId);
+
+  if (!destinationSpaceId && currentSpaceId)
+  {
+    try
+    {
+      const activeTab = await chrome.tabs.get(activeInfo.tabId);
+      if (activeTab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE)
+      {
+        // 没有 All 后，遗留的未分组 Tab 在首次激活时归入当前 Space。
+        queueTabForGrouping(activeTab, currentSpaceId);
+        destinationSpaceId = currentSpaceId;
+      }
+    }
+    catch { /* Tab may no longer exist */ }
+  }
 
   // if (import.meta.env.DEV)
   // {
@@ -349,10 +406,9 @@ chrome.tabs.onActivated.addListener(async (activeInfo) =>
   const followResult = await chrome.storage.local.get([FOLLOW_ACTIVE_TAB_KEY]);
   const followMode = parseFollowActiveTabMode(followResult[FOLLOW_ACTIVE_TAB_KEY]);
 
-  // Switch sidebar to tab's Space (unless in "All" space, or following is off)
+  // Follow 模式只在真实 Space 之间切换。
   let spaceSwitched = false;
-  const currentSpaceId = spaceStateManager.getActiveSpace(activeInfo.windowId);
-  if (followMode !== 'off' && destinationSpaceId && currentSpaceId !== 'all')
+  if (followMode !== 'off' && destinationSpaceId)
   {
     if (currentSpaceId !== destinationSpaceId)
     {
@@ -501,17 +557,32 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) =>
   // bookmark's space. Once deassociated it's a regular tab, which gets its
   // space from its live Chrome group directly (see getSpaceForTab), so there
   // is nothing left in tabSpaceRegistry to keep in sync - just remove it.
-  if (changeInfo.groupId !== undefined && changeInfo.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE && tab?.windowId)
+  if (changeInfo.groupId !== undefined && tab?.windowId)
   {
     try
     {
       const registeredSpaceId = tabSpaceRegistry.getSpace(tab.windowId, tabId);
       if (registeredSpaceId)
       {
-        const group = await chrome.tabGroups.get(changeInfo.groupId);
-        const space = await findSpaceByName(group.title);
+        const space = changeInfo.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE
+          ? undefined
+          : await chrome.tabGroups.get(changeInfo.groupId).then(group => findSpaceByName(group.title));
+        const associations = await getTabAssociations(tab.windowId);
+        const moveAction = resolveTrackedTabGroupMove({
+          itemKey: associations[tabId],
+          registeredSpaceId,
+          liveSpaceId: space?.id,
+        });
 
-        if (space?.id !== registeredSpaceId)
+        if (moveAction === 'update-space' && space)
+        {
+          tabSpaceRegistry.register(tab.windowId, tabId, space.id);
+        }
+        else if (moveAction === 'restore-space')
+        {
+          queueTabForGrouping(tab, registeredSpaceId);
+        }
+        else if (moveAction === 'deassociate')
         {
           tabSpaceRegistry.unregister(tab.windowId, tabId);
           chrome.runtime.sendMessage({
@@ -600,8 +671,18 @@ function queueTabForGrouping(tab: chrome.tabs.Tab, spaceId?: string): void
 {
   if (!tab.id || !tab.windowId) return;
 
-  const targetSpaceId = spaceId ?? spaceStateManager.getActiveSpace(tab.windowId);
-  if (!targetSpaceId || targetSpaceId === 'all') return;
+  const currentSpaceId = spaceStateManager.getActiveSpace(tab.windowId);
+  const targetSpaceId = resolveActiveSpaceId(
+    spaceManager.getSpaces(),
+    spaceId ?? currentSpaceId,
+  );
+  if (!targetSpaceId) return;
+
+  // 新窗口或旧 session 仍可能携带 all；首次创建 Tab 时就地迁移。
+  if (currentSpaceId !== targetSpaceId)
+  {
+    spaceStateManager.setActiveSpace(tab.windowId, targetSpaceId);
+  }
 
   groupingQueue.push({ tabId: tab.id, windowId: tab.windowId, spaceId: targetSpaceId, force: spaceId !== undefined });
   processGroupingQueue();
@@ -631,22 +712,6 @@ async function processGroupingQueue(): Promise<void>
 async function processGroupingRequest(request: TabGroupingRequest): Promise<void>
 {
   const { tabId, windowId, spaceId, force } = request;
-
-  // Check if this is a pinned-site managed tab (keep ungrouped)
-  if (await isPinnedManagedTab(windowId, tabId))
-  {
-    // Ungroup if currently in a group
-    try
-    {
-      const tab = await chrome.tabs.get(tabId);
-      if (tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE)
-      {
-        await chrome.tabs.ungroup(tabId);
-      }
-    }
-    catch { /* Tab may be closed */ }
-    return;
-  }
 
   try
   {
@@ -752,6 +817,12 @@ registerManager(pinnedSitesManager);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
 {
+  if (message?.action === WAIT_FOR_TAB_ASSOCIATIONS_READY)
+  {
+    tabAssociationReadiness.wait().then(() => sendResponse({ ready: true }));
+    return true;
+  }
+
   // Manager-routed messages come first: anything shaped "<Manager>_msg_<method>"
   // belongs to exactly one manager and never falls through to the flat
   // orchestration handlers below.
@@ -851,7 +922,7 @@ chrome.commands.onCommand.addListener((command) =>
         //   listPadding = 8    (SpaceList's rows container: py-1 padding, top + bottom)
         //   rowHeight = 28     (each space row: h-7)
         const spaces = spaceManager.getSpaces();
-        const itemCount = spaces.length + 1; // +1 for the "All" space
+        const itemCount = spaces.length;
         const popupWidth = 300;
         const headerHeight = 37;
         const searchBoxHeight = 39;

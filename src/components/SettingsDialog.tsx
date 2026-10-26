@@ -1,6 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Dialog } from './Dialog';
 import { FollowActiveTabMode } from '../utils/followActiveTab';
+import { Eye, EyeOff } from 'lucide-react';
+import {
+  AiRenameSettings,
+  DEFAULT_AI_RENAME_SETTINGS,
+  getHostPermissionPattern,
+} from '../utils/aiConfig';
+import { OpenAiCompatibleClient } from '../services/aiRenameService';
 
 export type BookmarkOpenMode = 'arc' | 'newTab' | 'activeTab';
 export type TabGroupDisplayOrder = 'groupsFirst' | 'groupsLast' | 'chromeOrder';
@@ -11,12 +18,12 @@ export interface SettingsValues {
   tabGroupDisplayOrder: TabGroupDisplayOrder;
   pinnedIconSize: number;
   bookmarkOpenMode: BookmarkOpenMode;
-  useSpaces: boolean;
   arcSingleClickOpensTab: boolean;
   audioQuickJump: boolean;
   useSpaceColor: boolean;
   spaceColorAlpha: number;  // 1-100 percent
   followActiveTab: FollowActiveTabMode;
+  aiSettings: AiRenameSettings;
 }
 
 interface SettingsDialogProps {
@@ -26,7 +33,7 @@ interface SettingsDialogProps {
   onApply: (settings: SettingsValues) => void;
 }
 
-type SettingsTab = 'appearance' | 'behaviour' | 'debug';
+type SettingsTab = 'appearance' | 'behaviour' | 'ai' | 'debug';
 
 export function SettingsDialog({
   isOpen,
@@ -40,13 +47,19 @@ export function SettingsDialog({
   const [tempTabGroupDisplayOrder, setTempTabGroupDisplayOrder] = useState(settings.tabGroupDisplayOrder);
   const [tempPinnedIconSize, setTempPinnedIconSize] = useState(settings.pinnedIconSize);
   const [tempBookmarkOpenMode, setTempBookmarkOpenMode] = useState(settings.bookmarkOpenMode);
-  const [tempUseSpaces, setTempUseSpaces] = useState(settings.useSpaces);
   const [tempArcSingleClickOpensTab, setTempArcSingleClickOpensTab] = useState(settings.arcSingleClickOpensTab);
   const [tempAudioQuickJump, setTempAudioQuickJump] = useState(settings.audioQuickJump);
   const [tempUseSpaceColor, setTempUseSpaceColor] = useState(settings.useSpaceColor);
   const [tempSpaceColorAlpha, setTempSpaceColorAlpha] = useState(settings.spaceColorAlpha);
   const [tempFollowActiveTab, setTempFollowActiveTab] = useState(settings.followActiveTab);
+  const [tempAiSettings, setTempAiSettings] = useState(settings.aiSettings);
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [aiValidation, setAiValidation] = useState<{
+    state: 'idle' | 'running' | 'success' | 'error';
+    message: string;
+  }>({ state: 'idle', message: '' });
+  const [hasPageAccess, setHasPageAccess] = useState(false);
 
   // Track previous isOpen to detect when dialog opens
   const wasOpen = useRef(false);
@@ -68,13 +81,18 @@ export function SettingsDialog({
       // These don't need fresh read - not shown in dialog or use chrome.storage.local
       setTempHideOtherBookmarks(settings.hideOtherBookmarks);
       setTempBookmarkOpenMode(settings.bookmarkOpenMode);
-      setTempUseSpaces(settings.useSpaces);
       setTempArcSingleClickOpensTab(settings.arcSingleClickOpensTab);
       setTempAudioQuickJump(settings.audioQuickJump);
       setTempUseSpaceColor(settings.useSpaceColor);
       setTempSpaceColorAlpha(settings.spaceColorAlpha);
       setTempFollowActiveTab(settings.followActiveTab);
+      setTempAiSettings(settings.aiSettings);
+      setShowApiKey(false);
+      setAiValidation({ state: 'idle', message: '' });
       setActiveTab('appearance');
+      chrome.permissions.contains({ origins: ['http://*/*', 'https://*/*'] })
+        .then(setHasPageAccess)
+        .catch(() => setHasPageAccess(false));
     }
     wasOpen.current = isOpen;
   }, [isOpen, settings]);
@@ -86,13 +104,62 @@ export function SettingsDialog({
       tabGroupDisplayOrder: tempTabGroupDisplayOrder,
       pinnedIconSize: tempPinnedIconSize,
       bookmarkOpenMode: tempBookmarkOpenMode,
-      useSpaces: tempUseSpaces,
       arcSingleClickOpensTab: tempArcSingleClickOpensTab,
       audioQuickJump: tempAudioQuickJump,
       useSpaceColor: tempUseSpaceColor,
       spaceColorAlpha: tempSpaceColorAlpha,
       followActiveTab: tempFollowActiveTab,
+      aiSettings: tempAiSettings,
     });
+  };
+
+  /**
+   * 请求用户配置的 API origin 权限并发送最小真实请求。
+   */
+  const handleValidateAi = async () =>
+  {
+    setAiValidation({ state: 'running', message: 'Validating with a real API request…' });
+    try
+    {
+      const origin = getHostPermissionPattern(tempAiSettings.baseUrl);
+      const granted = await chrome.permissions.request({ origins: [origin] });
+      if (!granted)
+      {
+        throw new Error('Permission to access the API host was not granted');
+      }
+
+      const result = await new OpenAiCompatibleClient().validate(tempAiSettings);
+      const protocol = result.protocol === 'responses' ? 'Responses API' : 'Chat Completions';
+      setAiValidation({
+        state: 'success',
+        message: `Configuration works with ${protocol} (${result.latencyMs} ms)`,
+      });
+    }
+    catch (error)
+    {
+      setAiValidation({
+        state: 'error',
+        message: error instanceof Error ? error.message : 'Validation failed',
+      });
+    }
+  };
+
+  /**
+   * 自动命名无法在后台临时弹权限，因此在设置阶段一次性申请网页读取权限。
+   */
+  const handleRequestPageAccess = async () =>
+  {
+    try
+    {
+      const granted = await chrome.permissions.request({
+        origins: ['http://*/*', 'https://*/*'],
+      });
+      setHasPageAccess(granted);
+    }
+    catch
+    {
+      setHasPageAccess(false);
+    }
   };
 
   const handleTempFontSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -134,7 +201,7 @@ export function SettingsDialog({
   );
 
   return (
-    <Dialog isOpen={isOpen} onClose={onClose} title="Settings" maxWidth="max-w-xs" footer={footerButtons}>
+    <Dialog isOpen={isOpen} onClose={onClose} title="Settings" maxWidth="max-w-lg" footer={footerButtons}>
       {/* Tab bar - sticky so it doesn't scroll away */}
       <div className="sticky top-0 bg-white dark:bg-gray-800 flex border-b border-gray-200 dark:border-gray-700 z-10">
         <button onClick={() => setActiveTab('appearance')} className={tabClass('appearance')}>
@@ -142,6 +209,9 @@ export function SettingsDialog({
         </button>
         <button onClick={() => setActiveTab('behaviour')} className={tabClass('behaviour')}>
           Behaviour
+        </button>
+        <button onClick={() => setActiveTab('ai')} className={tabClass('ai')}>
+          AI
         </button>
         {import.meta.env.DEV && (
           <button onClick={() => setActiveTab('debug')} className={tabClass('debug')}>
@@ -272,24 +342,6 @@ export function SettingsDialog({
               </div>
             )}
 
-            {/* Show Spaces */}
-            <div>
-              <label className="flex items-center gap-2 text-gray-700 dark:text-gray-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={tempUseSpaces}
-                  onChange={(e) => setTempUseSpaces(e.target.checked)}
-                  className="rounded border-gray-300 dark:border-gray-600"
-                />
-                Show Spaces
-              </label>
-              <p className="mt-0.5 text-gray-500 dark:text-gray-400 ml-5">
-                {tempUseSpaces
-                  ? "Organize tabs and bookmarks into focused workspaces"
-                  : "All tabs, tab groups, and bookmarks shown in one list"}
-              </p>
-            </div>
-
             {/* Audio button */}
             <div>
               <label className="flex items-center gap-2 text-gray-700 dark:text-gray-300 cursor-pointer">
@@ -347,9 +399,197 @@ export function SettingsDialog({
                 <option value="chromeOrder">Chrome's native order</option>
               </select>
               <p className="mt-0.5 text-gray-500 dark:text-gray-400 ml-5">
-                Only applies in the All view
+                Controls group placement when multiple groups are visible
               </p>
             </div>
+          </>
+        )}
+
+        {activeTab === 'ai' && (
+          <>
+            <div>
+              <label className="block font-medium mb-1 text-gray-700 dark:text-gray-300">
+                Base URL
+              </label>
+              <input
+                type="url"
+                value={tempAiSettings.baseUrl}
+                onChange={(event) => setTempAiSettings({ ...tempAiSettings, baseUrl: event.target.value })}
+                placeholder="https://api.openai.com/v1"
+                className="w-full px-2 py-1.5 border rounded dark:bg-gray-900 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              <p className="mt-1 text-gray-500 dark:text-gray-400">
+                Accepts a service root, /v1 base, or a complete /responses or /chat/completions URL.
+              </p>
+            </div>
+
+            <div>
+              <label className="block font-medium mb-1 text-gray-700 dark:text-gray-300">
+                API Key
+              </label>
+              <div className="relative">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={tempAiSettings.apiKey}
+                  onChange={(event) => setTempAiSettings({ ...tempAiSettings, apiKey: event.target.value })}
+                  autoComplete="off"
+                  className="w-full px-2 py-1.5 pr-9 border rounded dark:bg-gray-900 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(value => !value)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
+                  aria-label={showApiKey ? 'Hide API Key' : 'Show API Key'}
+                >
+                  {showApiKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+              <p className="mt-1 text-gray-500 dark:text-gray-400">
+                Stored locally by the extension. It is never sent to the page being renamed.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block font-medium mb-1 text-gray-700 dark:text-gray-300">
+                  Model
+                </label>
+                <input
+                  type="text"
+                  value={tempAiSettings.model}
+                  onChange={(event) => setTempAiSettings({ ...tempAiSettings, model: event.target.value })}
+                  placeholder="gpt-5-mini"
+                  className="w-full px-2 py-1.5 border rounded dark:bg-gray-900 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block font-medium mb-1 text-gray-700 dark:text-gray-300">
+                  API protocol
+                </label>
+                <select
+                  value={tempAiSettings.protocol}
+                  onChange={(event) => setTempAiSettings({
+                    ...tempAiSettings,
+                    protocol: event.target.value as AiRenameSettings['protocol'],
+                  })}
+                  className="w-full px-2 py-1.5 border rounded dark:bg-gray-900 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="auto">Auto</option>
+                  <option value="responses">Responses API</option>
+                  <option value="chat-completions">Chat Completions</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-medium mb-1 text-gray-700 dark:text-gray-300">
+                Reasoning effort
+              </label>
+              <select
+                value={tempAiSettings.reasoningEffort}
+                onChange={(event) => setTempAiSettings({
+                  ...tempAiSettings,
+                  reasoningEffort: event.target.value as AiRenameSettings['reasoningEffort'],
+                })}
+                className="w-full px-2 py-1.5 border rounded dark:bg-gray-900 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              >
+                <option value="off">None</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <p className="mt-1 text-gray-500 dark:text-gray-400">
+                None omits the reasoning parameter for models or compatible APIs that do not support it.
+              </p>
+            </div>
+
+            <div>
+              <label className="block font-medium mb-1 text-gray-700 dark:text-gray-300">
+                Prompt
+              </label>
+              <textarea
+                value={tempAiSettings.prompt}
+                onChange={(event) => setTempAiSettings({ ...tempAiSettings, prompt: event.target.value })}
+                rows={9}
+                className="w-full px-2 py-1.5 border rounded resize-y dark:bg-gray-900 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              <p className="mt-1 text-gray-500 dark:text-gray-400">
+                URL, title, description and page content are appended automatically.
+              </p>
+            </div>
+
+            <div className="rounded border border-gray-200 dark:border-gray-700 p-2 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-gray-700 dark:text-gray-300">Read web page content</div>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    {hasPageAccess
+                      ? 'Allowed for HTTP and HTTPS pages'
+                      : 'Without access, AI naming only uses the saved title and URL'}
+                  </p>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    Visible page text is sent to your configured API provider when a name is generated.
+                  </p>
+                </div>
+                {!hasPageAccess && (
+                  <button
+                    type="button"
+                    onClick={handleRequestPageAccess}
+                    className="shrink-0 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+                  >
+                    Allow
+                  </button>
+                )}
+              </div>
+
+              <label className="flex items-center gap-2 text-gray-700 dark:text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={tempAiSettings.autoRename}
+                  onChange={(event) => setTempAiSettings({ ...tempAiSettings, autoRename: event.target.checked })}
+                  className="rounded border-gray-300 dark:border-gray-600"
+                />
+                Automatically rename newly pinned sites and bookmarks
+              </label>
+              {tempAiSettings.autoRename && !hasPageAccess && (
+                <p className="text-amber-600 dark:text-amber-400">
+                  Automatic naming will use only the original title and URL until page access is allowed.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={handleValidateAi}
+                disabled={aiValidation.state === 'running'}
+                className="w-full px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+              >
+                {aiValidation.state === 'running' ? 'Validating…' : 'Validate configuration'}
+              </button>
+              <p className="mt-1 text-gray-500 dark:text-gray-400">
+                Sends a small real request and consumes a few tokens. Validation does not save the form.
+              </p>
+              {aiValidation.message && (
+                <p className={`mt-1 ${
+                  aiValidation.state === 'success'
+                    ? 'text-green-600 dark:text-green-400'
+                    : aiValidation.state === 'error'
+                      ? 'text-red-600 dark:text-red-400'
+                      : 'text-gray-500 dark:text-gray-400'
+                }`}>
+                  {aiValidation.message}
+                </p>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setTempAiSettings({ ...DEFAULT_AI_RENAME_SETTINGS })}
+              className="text-blue-500 hover:text-blue-600"
+            >
+              Reset AI settings to defaults
+            </button>
           </>
         )}
 

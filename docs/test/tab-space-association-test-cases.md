@@ -414,9 +414,9 @@ Chrome prefers to keep activation inside the same tab group when closing a tab, 
 | Step | Action                                                                                       | Off - expected                     | Space - expected                  | Space-and-scroll - expected       |
 | ---- | ----------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------ | ------------------------------------- |
 | 1    | Switch sidebar to Space A                                                                        | -                                       | -                                      | -                                        |
-| 2    | Click a pinned site to open its tab (pinned tabs are never grouped into any space's Chrome group) | -                                       | -                                      | -                                        |
+| 2    | Click a pinned site to open its tab; it joins Space A's Chrome group                              | -                                       | -                                      | -                                        |
 | 3    | Switch sidebar to Space B and activate a tab in Space B                                                                       | -                                       | -                                      | -                                        |
-| 4    | In Chrome's native tab strip, click the pinned tab to activate it                                | No switch expected (pinned tabs are space-agnostic) | No switch expected (same reason) | No switch expected (same reason) |
+| 4    | In Chrome's native tab strip, click the pinned tab to activate it                                | No switch | Switch to Space A | Switch to Space A (no row-scroll target in Favorites) |
 
 ### C.2 Explicit actions bypass the mode (should always scroll/switch regardless of setting)
 

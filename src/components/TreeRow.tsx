@@ -5,10 +5,6 @@ import { DraggableAttributes } from '@dnd-kit/core';
 import { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { LAYOUT, getIndentStyle } from '../utils/indent';
 
-// Shared ring style for hover and highlighted states
-const RING_HIGHLIGHT = 'ring-2 ring-inset ring-gray-300 dark:ring-gray-600';
-const RING_HIGHLIGHT_HOVER = 'hover:ring-2 hover:ring-inset hover:ring-gray-300 dark:hover:ring-gray-600';
-
 export interface TreeRowProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
   depth: number;
   title: React.ReactNode;
@@ -30,6 +26,7 @@ export interface TreeRowProps extends Omit<React.HTMLAttributes<HTMLDivElement>,
   badges?: React.ReactNode;     // Content after the title (e.g. tab count, pin)
   children?: React.ReactNode;   // For absolute overlays like drop indicators
   hideIcon?: boolean;           // Hide the icon slot entirely (removes space)
+  hideChevronSlot?: boolean;    // Arc 书签树通过整行折叠，不保留左侧箭头占位
 
   // DND props
   dndAttributes?: DraggableAttributes;
@@ -59,6 +56,7 @@ export const TreeRow = forwardRef<HTMLDivElement, TreeRowProps>(({
   badges,
   children,
   hideIcon,
+  hideChevronSlot,
   dndAttributes,
   dndListeners,
   className,
@@ -72,17 +70,15 @@ export const TreeRow = forwardRef<HTMLDivElement, TreeRowProps>(({
       {...dndAttributes}
       {...dndListeners}
       title={tooltip}
+      data-active={isActive || undefined}
+      data-selected={isSelected || undefined}
+      data-highlighted={isHighlighted || undefined}
       className={clsx(
-        'group flex items-center h-7 rounded-md cursor-default select-none transition-colors relative pr-2 outline-none',
-        // Selection style (brighter blue background)
-        isSelected && 'bg-blue-200 dark:bg-blue-800/60 text-blue-800 dark:text-blue-50',
-        // Active tab style (border ring, visually distinct from selection)
-        isActive && !isSelected && 'text-gray-700 dark:text-gray-200',
-        // Default style (ring hover) - only when neither active nor selected, and hover not disabled
-        !isActive && !isSelected && !disableHoverBorder && `${RING_HIGHLIGHT_HOVER} text-gray-700 dark:text-gray-200`,
-        !isActive && !isSelected && disableHoverBorder && 'text-gray-700 dark:text-gray-200',
-        // Highlight ring (e.g. during context menu)
-        !isActive && !isSelected && isHighlighted && RING_HIGHLIGHT,
+        'arc-tree-row group flex items-center min-h-9 rounded-xl cursor-default select-none transition-colors relative pr-2 outline-none text-gray-700 dark:text-gray-200',
+        isSelected && 'arc-tree-row-selected',
+        isActive && !isSelected && 'arc-tree-row-active',
+        !isActive && !isSelected && !disableHoverBorder && 'arc-tree-row-hoverable',
+        !isActive && !isSelected && isHighlighted && 'arc-tree-row-highlighted',
         isDragging && 'opacity-50',
         className
       )}
@@ -104,26 +100,27 @@ export const TreeRow = forwardRef<HTMLDivElement, TreeRowProps>(({
         </div>
       )}
 
-      {/* Chevron Slot - Fixed Width */}
-      <div
-        className="flex items-center justify-center shrink-0 h-full"
-        style={{ width: LAYOUT.CHEVRON_WIDTH }}
-      >
-        {hasChildren && (
-          <button
-            type="button"
-            aria-label={isExpanded ? "Collapse" : "Expand"}
-            aria-expanded={isExpanded}
-            className="w-full h-full flex items-center justify-center border-0 bg-transparent cursor-pointer hover:text-gray-900 dark:hover:text-white"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggle?.(e);
-            }}
-          >
-            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </button>
-        )}
-      </div>
+      {!hideChevronSlot && (
+        <div
+          className="flex items-center justify-center shrink-0 h-full"
+          style={{ width: LAYOUT.CHEVRON_WIDTH }}
+        >
+          {hasChildren && (
+            <button
+              type="button"
+              aria-label={isExpanded ? "Collapse" : "Expand"}
+              aria-expanded={isExpanded}
+              className="w-full h-full flex items-center justify-center border-0 bg-transparent cursor-pointer hover:text-gray-900 dark:hover:text-white"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle?.(e);
+              }}
+            >
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Icon Slot - Fixed Width (hidden when hideIcon is true) */}
       {hideIcon ? (
@@ -146,7 +143,7 @@ export const TreeRow = forwardRef<HTMLDivElement, TreeRowProps>(({
       )}
 
       {/* Title */}
-      <div className={clsx("flex-1 truncate min-w-0", isActive && "font-semibold underline underline-offset-2")}>
+      <div className={clsx("arc-tree-row-title flex-1 truncate min-w-0", isActive && "font-semibold")}>
         {title}
       </div>
 

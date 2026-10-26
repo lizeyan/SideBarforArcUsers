@@ -36,18 +36,18 @@ export const SpaceIconVisual: React.FC<SpaceIconVisualProps> = ({
     return (
       <div
         className={clsx(
-          "w-7 h-7 rounded flex items-center justify-center flex-shrink-0",
-          isActive ? colorStyle.badge : colorStyle.bg,
+          "arc-space-icon-visual w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0",
           className
         )}
+        data-active={isActive || undefined}
       >
         <span
           className={clsx(
             "flex items-center justify-center",
-            isActive ? "text-white dark:text-black" : colorStyle.text
+            isActive ? colorStyle.text : "text-gray-400 dark:text-gray-500"
           )}
         >
-          {getIcon(icon, 14, isActive)}
+          {getIcon(icon, 17, false)}
         </span>
       </div>
     );
@@ -58,16 +58,19 @@ export const SpaceIconVisual: React.FC<SpaceIconVisualProps> = ({
   return (
     <div
       className={clsx(
-        "w-7 h-7 rounded flex items-center justify-center flex-shrink-0",
+        "arc-space-icon-visual w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0",
         className
       )}
-      style={{ backgroundColor: isActive ? hexStyle.badge : hexStyle.bg }}
+      data-active={isActive || undefined}
     >
       <span
-        className="flex items-center justify-center"
-        style={{ color: isActive ? 'white' : hexStyle.text }}
+        className={clsx(
+          "flex items-center justify-center",
+          !isActive && "text-gray-400 dark:text-gray-500"
+        )}
+        style={{ color: isActive ? hexStyle.text : undefined }}
       >
-        {getIcon(icon, 14, isActive)}
+        {getIcon(icon, 17, false)}
       </span>
     </div>
   );
@@ -82,7 +85,7 @@ interface SpaceIconProps
   onEdit?: () => void;
   onDelete?: () => void;
   onCloseAllTabs?: () => void;
-  isAllSpace?: boolean;
+  canDelete?: boolean;
   isDraggable?: boolean;
   isDropTarget?: boolean;
   dropPosition?: DropPosition;
@@ -96,7 +99,7 @@ export const SpaceIcon: React.FC<SpaceIconProps> = ({
   onEdit,
   onDelete,
   onCloseAllTabs,
-  isAllSpace = false,
+  canDelete = true,
   isDraggable = false,
   isDropTarget = false,
   dropPosition,
@@ -154,33 +157,11 @@ export const SpaceIcon: React.FC<SpaceIconProps> = ({
       )}
       {...(isDraggable ? { ...attributes, ...listeners } : {})}
     >
-      {isAllSpace ? (
-        <div
-          className={clsx(
-            "w-7 h-7 rounded flex items-center justify-center flex-shrink-0",
-            isActive
-              ? "bg-[#5F6368] dark:bg-[#BDC1C6]"      // grey.badge
-              : "bg-[#F1F3F4] dark:bg-[#5F6368]/30"   // grey.bg
-          )}
-        >
-          <span
-            className={clsx(
-              "text-[9px] font-bold",
-              isActive
-                ? "text-white dark:text-black"              // standard active
-                : "text-[#5F6368] dark:text-[#BDC1C6]"      // grey.text
-            )}
-          >
-            ALL
-          </span>
-        </div>
-      ) : (
-        <SpaceIconVisual
-          icon={space.icon}
-          color={space.color}
-          isActive={isActive}
-        />
-      )}
+      <SpaceIconVisual
+        icon={space.icon}
+        color={space.color}
+        isActive={isActive}
+      />
     </button>
   );
 
@@ -193,10 +174,10 @@ export const SpaceIcon: React.FC<SpaceIconProps> = ({
       <ContextMenu.Portal>
         <ContextMenu.Content>
           <SpaceContextMenuContent
-            isAllSpace={isAllSpace}
             onEdit={onEdit}
             onDelete={onDelete}
             onCloseAllTabs={onCloseAllTabs}
+            canDelete={canDelete}
           />
         </ContextMenu.Content>
       </ContextMenu.Portal>

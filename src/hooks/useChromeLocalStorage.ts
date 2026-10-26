@@ -17,7 +17,7 @@ export function useChromeLocalStorage<T>(
     parse?: Parser<T>;
     serialize?: Serializer<T>;
   }
-): [T, (value: T) => void]
+): [T, (value: T) => void, boolean]
 {
   const parse = options?.parse ?? ((v: string) => JSON.parse(v) as T);
   const serialize = options?.serialize ?? ((v: T) => JSON.stringify(v));
@@ -32,6 +32,7 @@ export function useChromeLocalStorage<T>(
   initialValueRef.current = initialValue;
 
   const [value, setValue] = useState<T>(initialValue);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // Load on mount - check chrome.storage.local first, then migrate from localStorage if needed
   useEffect(() =>
@@ -85,6 +86,7 @@ export function useChromeLocalStorage<T>(
         }
         // else: no value anywhere, keep initialValue
       }
+      setIsLoaded(true);
     }).catch(error =>
     {
       if (import.meta.env.DEV)
@@ -92,6 +94,7 @@ export function useChromeLocalStorage<T>(
         console.error(`useChromeLocalStorage: Failed to get "${key}":`, error);
       }
       // Keep initialValue on error (already the default state)
+      if (mounted) setIsLoaded(true);
     });
 
     return () => { mounted = false; };
@@ -136,5 +139,5 @@ export function useChromeLocalStorage<T>(
     });
   }, [key]);
 
-  return [value, setStoredValue];
+  return [value, setStoredValue, isLoaded];
 }

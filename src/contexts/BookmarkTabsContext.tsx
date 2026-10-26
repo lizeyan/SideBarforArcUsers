@@ -9,7 +9,11 @@ import {
   setTabAssociations,
   saveTabAssociationBackup,
   removeTabAssociationBackup,
+  WAIT_FOR_TAB_ASSOCIATIONS_READY,
+  subscribeToTabAssociationChanges,
 } from '../utils/tabAssociations';
+import { restoreTabAssociations } from '../utils/restoreTabAssociations';
+import { isActivationForWindow } from '../utils/tabActivationScope';
 
 // Helper to create item keys
 const makeBookmarkKey = (bookmarkId: string) => `bookmark-${bookmarkId}`;
@@ -22,14 +26,15 @@ interface BookmarkTabsContextValue
   closeBookmarkTab: (bookmarkId: string) => void;
   isBookmarkLoaded: (bookmarkId: string) => boolean;
   isBookmarkAudible: (bookmarkId: string) => boolean;
+  isBookmarkMuted: (bookmarkId: string) => boolean;
   isBookmarkActive: (bookmarkId: string) => boolean;
   getTabIdForBookmark: (bookmarkId: string) => number | undefined;
   getBookmarkLiveTitle: (bookmarkId: string) => string | undefined;
   associateExistingTab: (tabId: number, bookmarkId: string, spaceId?: string) => Promise<void>;
   restoreItemAssociation: (tabId: number, itemKey: string) => Promise<void>;
-  deassociateBookmarkTab: (bookmarkId: string) => void;
+  deassociateBookmarkTab: (bookmarkId: string) => Promise<void>;
   // Pinned site functions
-  openPinnedTab: (pinnedId: string, url: string) => Promise<number | undefined>;
+  openPinnedTab: (pinnedId: string, url: string, spaceId?: string) => Promise<number | undefined>;
   closePinnedTab: (pinnedId: string) => void;
   isPinnedLoaded: (pinnedId: string) => boolean;
   isPinnedAudible: (pinnedId: string) => boolean;
@@ -74,6 +79,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   const [itemToTab, setItemToTab] = useState<Map<string, number>>(new Map());
   const [tabToItem, setTabToItem] = useState<Map<number, string>>(new Map());
   const [audibleTabs, setAudibleTabs] = useState<Set<number>>(new Set());
+  const [mutedTabs, setMutedTabs] = useState<Set<number>>(new Set());
   const [tabTitles, setTabTitles] = useState<Map<number, string>>(new Map());
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,73 +113,34 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
 
     try
     {
+      await chrome.runtime.sendMessage({ action: WAIT_FOR_TAB_ASSOCIATIONS_READY });
+
       // Get stored associations from session storage
       const associations = await getTabAssociations(windowId);
 
-      const newItemToTab = new Map<string, number>();
-      const newTabToItem = new Map<number, string>();
-      // Seed live titles/audible state from existing tabs so the UI shows the
-      // tab title (not bookmark name) immediately on sidebar reopen — chrome.tabs.onUpdated
-      // only fires on future changes, so without this the maps stay empty until the tab reloads.
-      const newTabTitles = new Map<number, string>();
-      const newAudibleTabs = new Set<number>();
-
-      // Validate each stored tabId still exists
-      const tabIds = Object.keys(associations).map(id => parseInt(id, 10));
-
-      for (const tabId of tabIds)
-      {
-        try
+      performance.mark('sidebar:associations-start');
+      const restored = await restoreTabAssociations(associations, (tabId) =>
+        new Promise<chrome.tabs.Tab | null>((resolve) =>
         {
-          const tab = await new Promise<chrome.tabs.Tab | null>((resolve) =>
+          chrome.tabs.get(tabId, (tab) =>
           {
-            chrome.tabs.get(tabId, (t) =>
-            {
-              if (chrome.runtime.lastError)
-              {
-                resolve(null);
-              }
-              else
-              {
-                resolve(t);
-              }
-            });
+            resolve(chrome.runtime.lastError ? null : tab);
           });
+        }));
+      performance.mark('sidebar:associations-ready');
+      performance.measure('sidebar:associations-restore', 'sidebar:associations-start', 'sidebar:associations-ready');
 
-          if (tab)
-          {
-            const itemKey = associations[tabId];
-            newItemToTab.set(itemKey, tabId);
-            newTabToItem.set(tabId, itemKey);
-            if (tab.title)
-            {
-              newTabTitles.set(tabId, tab.title);
-            }
-            if (tab.audible)
-            {
-              newAudibleTabs.add(tabId);
-            }
-          }
-          else
-          {
-            // Tab no longer exists - remove from storage
-            delete associations[tabId];
-          }
-        }
-        catch
-        {
-          // Tab doesn't exist
-          delete associations[tabId];
-        }
+      // 只有清理掉失效 Tab 时才回写，避免 storage 监听形成无意义的重建循环。
+      if (JSON.stringify(restored.associations) !== JSON.stringify(associations))
+      {
+        await setTabAssociations(windowId, restored.associations);
       }
 
-      // Update storage with cleaned associations
-      await setTabAssociations(windowId, associations);
-
-      setItemToTab(newItemToTab);
-      setTabToItem(newTabToItem);
-      setTabTitles(newTabTitles);
-      setAudibleTabs(newAudibleTabs);
+      setItemToTab(restored.itemToTab);
+      setTabToItem(restored.tabToItem);
+      setTabTitles(restored.tabTitles);
+      setAudibleTabs(restored.audibleTabs);
+      setMutedTabs(restored.mutedTabs);
       setIsInitialized(true);
     }
     catch (err)
@@ -196,52 +163,58 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     }
   }, [currentWindowId, rebuildAssociations]);
 
-  // Helper to remove association for a tab
-  const removeLocalTabAssociation = useCallback((tabId: number, windowId: number) =>
+  useEffect(() =>
   {
+    if (currentWindowId === null) return;
+    return subscribeToTabAssociationChanges(
+      currentWindowId,
+      () => { void rebuildAssociations(currentWindowId); }
+    );
+  }, [currentWindowId, rebuildAssociations]);
+
+  // Helper to remove association for a tab
+  const removeLocalTabAssociation = useCallback(async (tabId: number, windowId: number): Promise<void> =>
+  {
+    const itemKey = tabToItem.get(tabId);
+    if (!itemKey) return;
+
+    setItemToTab((prev) =>
+    {
+      const next = new Map(prev);
+      next.delete(itemKey);
+      return next;
+    });
     setTabToItem((prev) =>
     {
-      const itemKey = prev.get(tabId);
-      if (itemKey)
-      {
-        setItemToTab((prevIT) =>
-        {
-          const newMap = new Map(prevIT);
-          newMap.delete(itemKey);
-          return newMap;
-        });
-
-        // Clean up title
-        setTabTitles((prevTitles) =>
-        {
-          const newMap = new Map(prevTitles);
-          newMap.delete(tabId);
-          return newMap;
-        });
-
-        // Clean up audible state
-        if (import.meta.env.DEV)
-        {
-          console.log(`[removeLocalTabAssociation] cleaned up audibleTabs for tab=${tabId}`);
-        }
-        setAudibleTabs((prev) =>
-        {
-          const newSet = new Set(prev);
-          newSet.delete(tabId);
-          return newSet;
-        });
-
-        // Clean up from session storage and local backup
-        removeStoredAssociation(windowId, tabId);
-        removeTabAssociationBackup(windowId, itemKey);
-
-        const newMap = new Map(prev);
-        newMap.delete(tabId);
-        return newMap;
-      }
-      return prev;
+      const next = new Map(prev);
+      next.delete(tabId);
+      return next;
     });
-  }, []);
+    setTabTitles((prev) =>
+    {
+      const next = new Map(prev);
+      next.delete(tabId);
+      return next;
+    });
+    setAudibleTabs((prev) =>
+    {
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
+    setMutedTabs((prev) =>
+    {
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
+
+    // 显式等待 session 和 local backup 都删除完成，Side Panel 关闭也不会丢写。
+    await Promise.all([
+      removeStoredAssociation(windowId, tabId),
+      removeTabAssociationBackup(windowId, itemKey),
+    ]);
+  }, [tabToItem]);
 
   // Listen for tab removal
   useEffect(() =>
@@ -250,7 +223,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
 
     const handleTabRemoved = (tabId: number) =>
     {
-      removeLocalTabAssociation(tabId, currentWindowId);
+      void removeLocalTabAssociation(tabId, currentWindowId);
     };
 
     chrome.tabs?.onRemoved?.addListener(handleTabRemoved);
@@ -272,7 +245,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
       // Only remove if detached from our window
       if (detachInfo.oldWindowId === currentWindowId)
       {
-        removeLocalTabAssociation(tabId, currentWindowId);
+        void removeLocalTabAssociation(tabId, currentWindowId);
       }
     };
 
@@ -296,7 +269,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
       if (message.action !== SpaceMessageAction.DEASSOCIATE_TAB) return;
       if (message.windowId !== currentWindowId || message.tabId === undefined) return;
 
-      removeLocalTabAssociation(message.tabId, currentWindowId);
+      void removeLocalTabAssociation(message.tabId, currentWindowId);
     };
 
     chrome.runtime.onMessage.addListener(handleMessage);
@@ -322,6 +295,23 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
         {
           const newSet = new Set(prev);
           if (changeInfo.audible)
+          {
+            newSet.add(tabId);
+          }
+          else
+          {
+            newSet.delete(tabId);
+          }
+          return newSet;
+        });
+      }
+
+      if (changeInfo.mutedInfo !== undefined)
+      {
+        setMutedTabs((prev) =>
+        {
+          const newSet = new Set(prev);
+          if (changeInfo.mutedInfo?.muted)
           {
             newSet.add(tabId);
           }
@@ -364,13 +354,18 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   // Listen for active tab changes
   useEffect(() =>
   {
+    if (currentWindowId === null) return;
+
     const handleTabActivated = (activeInfo: chrome.tabs.TabActiveInfo) =>
     {
-      setActiveTabId(activeInfo.tabId);
+      if (isActivationForWindow(currentWindowId, activeInfo))
+      {
+        setActiveTabId(activeInfo.tabId);
+      }
     };
 
     // Initialize with current active tab
-    chrome.tabs?.query({ active: true, currentWindow: true }, (tabs) =>
+    chrome.tabs?.query({ active: true, windowId: currentWindowId }, (tabs) =>
     {
       if (tabs.length > 0 && tabs[0].id)
       {
@@ -384,7 +379,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     {
       chrome.tabs?.onActivated?.removeListener(handleTabActivated);
     };
-  }, []);
+  }, [currentWindowId]);
 
   // Store association in session storage and local backup
   // tabUrl and tabIndex can be passed directly (e.g. from tab creation callback) to avoid
@@ -418,7 +413,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
 
     if (url !== undefined && index !== undefined)
     {
-      saveTabAssociationBackup(currentWindowId, itemKey, { tabId, url, tabIndex: index });
+      await saveTabAssociationBackup(currentWindowId, itemKey, { tabId, url, tabIndex: index });
     }
   }, [currentWindowId]);
 
@@ -459,19 +454,20 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
           return newMap;
         });
 
-        // Register space with background for bookmark tabs
+        // 书签和 Favorite 固定 Tab 都登记其原生 Chrome 组归属。
         if (spaceId && windowId)
         {
-          tabSpaceRegistryProxy.register(windowId, tabId, spaceId);
+          await tabSpaceRegistryProxy.register(windowId, tabId, spaceId);
         }
 
-        // Tell background to re-check this tab (will group into space if active)
+        // 已知固定项归属时显式传递目标 Space，避免快速切换 Space 造成分组竞态。
         if (windowId)
         {
           chrome.runtime.sendMessage({
             action: 'queue-tab-for-grouping',
             tabId,
-            windowId
+            windowId,
+            spaceId,
           });
         }
 
@@ -562,6 +558,12 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     return tabId !== undefined && audibleTabs.has(tabId);
   }, [itemToTab, audibleTabs]);
 
+  const isBookmarkMuted = useCallback((bookmarkId: string): boolean =>
+  {
+    const tabId = itemToTab.get(makeBookmarkKey(bookmarkId));
+    return tabId !== undefined && mutedTabs.has(tabId);
+  }, [itemToTab, mutedTabs]);
+
   const getTabIdForBookmark = useCallback((bookmarkId: string): number | undefined =>
   {
     return itemToTab.get(makeBookmarkKey(bookmarkId));
@@ -592,7 +594,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
 
     if (spaceId && currentWindowId !== null)
     {
-      tabSpaceRegistryProxy.register(currentWindowId, tabId, spaceId);
+      await tabSpaceRegistryProxy.register(currentWindowId, tabId, spaceId);
 
       chrome.runtime.sendMessage({
         action: 'queue-tab-for-grouping',
@@ -636,21 +638,25 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   }, [storeAssociation]);
 
   // Deassociate a bookmark from its tab (tab stays alive, bookmark becomes unloaded)
-  const deassociateBookmarkTab = useCallback((bookmarkId: string): void =>
+  const deassociateBookmarkTab = useCallback(async (bookmarkId: string): Promise<void> =>
   {
     if (currentWindowId === null) return;
     const itemKey = makeBookmarkKey(bookmarkId);
     const tabId = itemToTab.get(itemKey);
     if (tabId !== undefined)
     {
-      removeLocalTabAssociation(tabId, currentWindowId);
+      await removeLocalTabAssociation(tabId, currentWindowId);
     }
   }, [itemToTab, currentWindowId, removeLocalTabAssociation]);
 
   // --- Pinned site-specific wrappers ---
-  const openPinnedTab = useCallback(async (pinnedId: string, url: string): Promise<number | undefined> =>
+  const openPinnedTab = useCallback(async (
+    pinnedId: string,
+    url: string,
+    spaceId?: string
+  ): Promise<number | undefined> =>
   {
-    return openItemTab(makePinnedKey(pinnedId), url);
+    return openItemTab(makePinnedKey(pinnedId), url, spaceId);
   }, [openItemTab]);
 
   const closePinnedTab = useCallback((pinnedId: string): void =>
@@ -681,10 +687,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   }, [itemToTab, tabTitles]);
 
   // Deassociate a pinned site from its tab (tab stays alive, becomes unmanaged).
-  // Awaits the storage removal before queueing grouping, so the background's
-  // isPinnedManagedTab check (which reads that same storage) no longer sees this
-  // tab as pin-managed and will group it into the active space instead of leaving
-  // it ungrouped.
+  // 先移除关联再重新排入当前 Space，background 才会把它按普通 Tab 处理。
   const deassociatePinnedTab = useCallback(async (pinnedId: string): Promise<void> =>
   {
     if (currentWindowId === null) return;
@@ -692,8 +695,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     const tabId = itemToTab.get(itemKey);
     if (tabId !== undefined)
     {
-      await removeStoredAssociation(currentWindowId, tabId);
-      removeLocalTabAssociation(tabId, currentWindowId);
+      await removeLocalTabAssociation(tabId, currentWindowId);
       chrome.runtime.sendMessage({ action: 'queue-tab-for-grouping', tabId, windowId: currentWindowId });
     }
   }, [itemToTab, currentWindowId, removeLocalTabAssociation]);
@@ -737,6 +739,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     closeBookmarkTab,
     isBookmarkLoaded,
     isBookmarkAudible,
+    isBookmarkMuted,
     isBookmarkActive,
     getTabIdForBookmark,
     getBookmarkLiveTitle,
@@ -761,6 +764,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     closeBookmarkTab,
     isBookmarkLoaded,
     isBookmarkAudible,
+    isBookmarkMuted,
     isBookmarkActive,
     getTabIdForBookmark,
     getBookmarkLiveTitle,

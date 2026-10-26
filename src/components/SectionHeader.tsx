@@ -13,6 +13,7 @@ interface SectionHeaderProps
   showMenuButton?: boolean;  // Show "..." button (default true). When false, use right-click for menu.
   textClassName?: string;  // Optional custom text color classes (overrides default gray)
   labelClassName?: string;  // Optional extra classes for the label span (e.g. font-bold)
+  className?: string;  // 供视觉主题使用的语义类名
 }
 
 export const SectionHeader: React.FC<SectionHeaderProps> = ({
@@ -24,6 +25,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
   showMenuButton = true,
   textClassName,
   labelClassName,
+  className,
 }) =>
 {
   const menuJustClosedRef = useRef(false);
@@ -61,7 +63,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
 
   const headerContent = (
     <div
-      className={`group relative flex items-center py-1 rounded select-none outline-none border-2 border-transparent ${textClassName ?? defaultTextColor}`}
+      className={`arc-section-header group relative flex items-center py-1 rounded select-none outline-none border-2 border-transparent ${textClassName ?? defaultTextColor} ${className ?? ''}`}
       style={{
         paddingLeft: `${getIndentPadding(0)}px`,
         paddingRight: '8px',
@@ -73,7 +75,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
           {icon}
         </span>
       )}
-      <span className={`flex-1 ${labelClassName ?? ''}`}>
+      <span className={`arc-section-label flex-1 ${labelClassName ?? ''}`}>
         {label}
       </span>
     </div>
@@ -102,7 +104,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
       {({ open: openMenu, isOpen: isMenuOpen }) => (
         <>
           <div
-            className={`group relative flex items-center py-1 rounded select-none outline-none border-2 border-transparent ${textClassName ?? defaultTextColor}`}
+            className={`arc-section-header group relative flex items-center py-1 rounded select-none outline-none border-2 border-transparent ${textClassName ?? defaultTextColor} ${className ?? ''}`}
             style={{
               paddingLeft: `${getIndentPadding(0)}px`,
               paddingRight: '8px',
@@ -114,7 +116,7 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
                 {icon}
               </span>
             )}
-            <span className="flex-1">
+            <span className={`arc-section-label flex-1 ${labelClassName ?? ''}`}>
               {label}
             </span>
             <button

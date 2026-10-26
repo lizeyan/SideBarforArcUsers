@@ -381,7 +381,7 @@ export async function runDeletePinnedSiteTests(
         }
       }
 
-      // Verify tabs were closed on do() for withTab pins
+      // Verify tabs stay open after Unpin so they can reappear in Tabs.
       for (const pin of testCase.pins)
       {
         if (pin.selected && pin.withTab)
@@ -392,15 +392,13 @@ export async function runDeletePinnedSiteTests(
             try
             {
               await chrome.tabs.get(tabId);
-              // Tab still exists — fail
-              const error = `Tab for "${pin.title}" (tabId=${tabId}) should have been closed`;
-              console.error(`  FAIL ${error}`);
-              results.push({ name: testCase.name, passed: false, error });
-              continue;
             }
             catch
             {
-              // Tab was closed — expected
+              const error = `Tab for "${pin.title}" (tabId=${tabId}) should remain open after Unpin`;
+              console.error(`  FAIL ${error}`);
+              results.push({ name: testCase.name, passed: false, error });
+              continue;
             }
           }
         }
