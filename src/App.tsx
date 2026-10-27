@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { BookmarkTree } from './components/BookmarkTree';
 import { TabList, ExternalDropTarget, ResolveBookmarkDropTarget } from './components/TabList';
 import { PinnedBar } from './components/PinnedBar';
@@ -25,9 +25,7 @@ import { UnifiedDndProvider } from './contexts/UnifiedDndContext';
 import { UnifiedDragOverlay } from './components/UnifiedDragOverlay';
 import { SpaceDialogs } from './components/SpaceDialogs';
 import { useFontSize } from './contexts/FontSizeContext';
-import { getIconUrl } from './utils/iconify';
-import { isEmoji } from './utils/emoji';
-import { GROUP_COLORS, getSpaceBgColor } from './utils/groupColors';
+import { getSpaceBgColor } from './utils/groupColors';
 import { Settings, Info, Upload, Download, RefreshCw, Undo2, Sparkles, Newspaper, Mail, Heart } from 'lucide-react';
 import { SectionHeader } from './components/SectionHeader';
 import { SpaceContextMenuContent } from './components/SpaceContextMenuContent';
@@ -89,6 +87,7 @@ interface SidebarContentProps
   onSpaceDropTargetChange?: (spaceId: string | null) => void;
   onAiRenameBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
   onBookmarkCreated?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
+  pinnedSiteUrls: readonly string[];
 }
 
 // Storage key for scroll position per space per window
@@ -114,6 +113,7 @@ const SidebarContent: React.FC<SidebarContentProps> = ({
   onSpaceDropTargetChange,
   onAiRenameBookmark,
   onBookmarkCreated,
+  pinnedSiteUrls,
 }) =>
 {
   const { spaces, activeSpace, activeSpaceId, windowId, getSpaceSwitchSource } = useSpacesContext();
@@ -235,6 +235,7 @@ const SidebarContent: React.FC<SidebarContentProps> = ({
         onSpaceDropTargetChange={onSpaceDropTargetChange}
         onPerformAction={onPerformAction}
         onBookmarkCreated={onBookmarkCreated}
+        pinnedSiteUrls={pinnedSiteUrls}
       />
     </div>
   );
@@ -252,9 +253,7 @@ const SpaceTitle: React.FC<SpaceTitleProps> = ({ onEditSpace, onDeleteSpace, onC
 {
   const { spaces, activeSpace } = useSpacesContext();
   const fontSize = useFontSize();
-  const titleFontSize = fontSize + 1;
-  const iconSize = titleFontSize;
-  const colorStyle = GROUP_COLORS[activeSpace.color] ?? GROUP_COLORS.grey;
+  const titleFontSize = fontSize;
 
   if (spaces.length === 0)
   {
@@ -264,35 +263,11 @@ const SpaceTitle: React.FC<SpaceTitleProps> = ({ onEditSpace, onDeleteSpace, onC
         menuContent={null}
         fontSize={titleFontSize}
         showMenuButton={false}
-        labelClassName="font-bold"
+        labelClassName="font-medium"
         className="arc-space-title"
       />
     );
   }
-
-  // Build icon element based on icon type
-  const iconElement = isEmoji(activeSpace.icon) ? (
-    // Emoji icons render as text
-    <span style={{ fontSize: iconSize }} className="leading-none">{activeSpace.icon}</span>
-  ) : (
-    // Lucide/Iconify icons use CSS mask so they inherit currentColor from the title text
-    <span
-      style={{
-        display: 'inline-block',
-        width: iconSize,
-        height: iconSize,
-        backgroundColor: 'currentColor',
-        maskImage: `url(${getIconUrl(activeSpace.icon)})`,
-        maskSize: 'contain',
-        maskRepeat: 'no-repeat',
-        maskPosition: 'center',
-        WebkitMaskImage: `url(${getIconUrl(activeSpace.icon)})`,
-        WebkitMaskSize: 'contain',
-        WebkitMaskRepeat: 'no-repeat',
-        WebkitMaskPosition: 'center',
-      }}
-    />
-  );
 
   const menuContent = (
     <SpaceContextMenuContent
@@ -306,13 +281,11 @@ const SpaceTitle: React.FC<SpaceTitleProps> = ({ onEditSpace, onDeleteSpace, onC
   return (
     <SectionHeader
       label={activeSpace.name}
-      icon={iconElement}
       menuContent={menuContent}
       menuTitle="Space options"
       fontSize={titleFontSize}
       showMenuButton={true}
-      textClassName={colorStyle.text}
-      labelClassName="font-bold"
+      labelClassName="font-medium"
       className="arc-space-title"
     />
   );
@@ -771,6 +744,10 @@ function App() {
     replacePinnedSites,
     appendPinnedSites,
   } = usePinnedSites();
+  const pinnedSiteUrls = useMemo(
+    () => pinnedSites.map(site => site.url),
+    [pinnedSites]
+  );
   const { tabs, refreshTabs } = useTabs();
   const { hasUnreadNews, markNewsRead, openNews } = useNewsCheck();
 
@@ -1478,6 +1455,7 @@ function App() {
         onSpaceDropTargetChange={setSpaceDropTargetId}
         onAiRenameBookmark={handleAiRenameBookmark}
         onBookmarkCreated={handleBookmarkCreated}
+        pinnedSiteUrls={pinnedSiteUrls}
       />
 
       {/* Space Dialogs */}

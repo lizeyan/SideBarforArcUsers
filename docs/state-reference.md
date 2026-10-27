@@ -77,12 +77,6 @@ Need to persist across browser restart?
 
 Stored via `chrome.storage.session`. Survives service worker restarts, cleared on browser close.
 
-### `bg_windowActiveGroups`
-Active tab group per window (Map: windowId → groupId)
-- Owner: `src/background.ts` (BackgroundState class)
-- Consumers: `src/background.ts`
-- Instances: 1 per window
-
 ### `bg_windowTabHistory`
 Back/forward navigation stack (Map: windowId → {stack, index})
 - Owner: `src/background.ts` (BackgroundState class)
@@ -100,7 +94,7 @@ Active space per window
 - Owner: `src/background.ts` (SpaceWindowStateManager class)
 - Consumers: `src/contexts/SpacesContext.tsx` (read-only copy synced via messages)
 - Instances: 1 per window
-- Note: Space-tab membership uses Chrome tab groups (Space.name matches group.title). See `021-recouple-group-space.md`.
+- Note: active Space selection is independent from user-owned Chrome tab groups.
 
 ### `tabAssociations_${windowId}`
 Bookmark/pinned site → tab ID mapping (Record: itemKey → tabId)
@@ -119,6 +113,17 @@ Folder expand/collapse state (Record: folderId → boolean)
 ## Chrome Local Storage
 
 Stored via `chrome.storage.local`. Persistent across browser sessions.
+
+### `tabSpaceAssignments`
+Authoritative real Tab → Space identity across extension and browser restarts.
+```typescript
+Array<{ windowId, tabId, spaceId, url, index }>
+```
+- Owner: `src/managers/impl/tabSpaceRegistry.ts`
+- Consumers: background tab activation/new-tab handling, `useTabSpaceAssignments`, Space move/delete actions
+- Recovery: exact live tab ID first; after browser restoration, URL plus nearest tab index is used as a fallback
+- Migration: legacy session registry and existing Space-named native groups are read once to seed internal assignments
+- Invariant: Chrome native groups are user-owned presentation and never determine or mutate Space identity
 
 ### `spaces`
 Space definitions
@@ -228,7 +233,8 @@ Lost on page reload or service worker restart.
 ├─────────────────────────────────────────────────────────────────┤
 │  chrome.storage.local (survives browser restart)                │
 │  ├─ spaces                                                      │
-│  └─ pinnedSites                                                 │
+│  ├─ pinnedSites                                                 │
+│  └─ tabSpaceAssignments             (real Tab → Space)          │
 ├─────────────────────────────────────────────────────────────────┤
 │  browser localStorage (survives browser restart)                │
 │  └─ sidebar-* settings (10 keys)                                │
@@ -238,7 +244,6 @@ Lost on page reload or service worker restart.
 │                    SESSION STORAGE                              │
 ├─────────────────────────────────────────────────────────────────┤
 │  chrome.storage.session (cleared on browser close)              │
-│  ├─ bg_windowActiveGroups           (per window)                │
 │  ├─ bg_windowTabHistory             (per window)                │
 │  ├─ spaceWindowState_{winId}        (per window)                │
 │  ├─ tabAssociations_{winId}         (per window)                │

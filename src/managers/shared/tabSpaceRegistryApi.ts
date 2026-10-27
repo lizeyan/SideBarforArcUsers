@@ -13,8 +13,12 @@
  * is no mirror store or broadcast for this manager. See the decision doc's
  * migration order.
  */
+export const TAB_SPACE_ASSIGNMENTS_CHANGED = 'tab-space-assignments-changed';
+
 export interface TabSpaceRegistryApi
 {
-  /** Record which space a tab belongs to, so background can regroup it later. */
-  register(windowId: number, tabId: number, spaceId: string): void;
+  /** Record which Space a tab belongs to; the association is independent of Chrome groups. */
+  register(windowId: number, tabId: number, spaceId: string): Promise<void>;
+  unregister(windowId: number, tabId: number): Promise<void>;
+  getWindowAssignments(windowId: number): Record<number, string>;
 }

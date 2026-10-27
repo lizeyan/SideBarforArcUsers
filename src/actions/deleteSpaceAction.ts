@@ -1,8 +1,8 @@
 import { UndoableAction } from './types';
 import { truncateTitle } from '../utils/truncateTitle';
 import { Space } from '../contexts/SpacesContext';
-import { toChromeColor } from '../utils/groupColors';
 import { spaceManagerProxy } from '../managers/proxies/spaceManagerProxy';
+import { tabSpaceRegistryProxy } from '../managers/proxies/tabSpaceRegistryProxy';
 
 interface TabSnapshot
 {
@@ -68,16 +68,17 @@ export class DeleteSpaceAction implements UndoableAction
       tabs: [],
     };
 
-    // Find Chrome tab group matching the space name
+    // 快照扩展内部登记到该 Space 的全部真实 Tab，原生 Chrome 组不参与。
     try
     {
-      const groups = await chrome.tabGroups.query({ windowId: this.windowId, title: space.name });
-      if (groups.length > 0)
-      {
-        const tabs = await chrome.tabs.query({ groupId: groups[0].id });
+      const [tabs, assignments] = await Promise.all([
+        chrome.tabs.query({ windowId: this.windowId }),
+        tabSpaceRegistryProxy.getWindowAssignments(this.windowId),
+      ]);
+      const spaceTabs = tabs.filter(tab => tab.id !== undefined && assignments[tab.id] === space.id);
 
-        // Snapshot each tab
-        for (const tab of tabs)
+      // Snapshot each tab
+      for (const tab of spaceTabs)
         {
           if (tab.id === undefined) continue;
 
@@ -101,12 +102,11 @@ export class DeleteSpaceAction implements UndoableAction
           this.snapshot.tabs.push(tabSnapshot);
         }
 
-        // Close all tabs in the group
-        const tabIds = this.snapshot.tabs.map(t => t.tabId);
-        if (tabIds.length > 0)
-        {
-          await chrome.tabs.remove(tabIds);
-        }
+      // Close all tabs assigned to the Space.
+      const tabIds = this.snapshot.tabs.map(t => t.tabId);
+      if (tabIds.length > 0)
+      {
+        await chrome.tabs.remove(tabIds);
       }
     }
     catch (err)
@@ -160,8 +160,6 @@ export class DeleteSpaceAction implements UndoableAction
     if (this.snapshot.tabs.length > 0)
     {
       const sorted = [...this.snapshot.tabs].sort((a, b) => a.index - b.index);
-      const newTabIds: number[] = [];
-
       for (const tabSnapshot of sorted)
       {
         try
@@ -174,7 +172,7 @@ export class DeleteSpaceAction implements UndoableAction
           });
 
           if (!newTab.id) continue;
-          newTabIds.push(newTab.id);
+          await tabSpaceRegistryProxy.register(this.windowId, newTab.id, this.snapshot.space.id);
 
           if (import.meta.env.DEV)
           {
@@ -200,30 +198,6 @@ export class DeleteSpaceAction implements UndoableAction
         }
       }
 
-      // Re-create tab group with space name and color
-      if (newTabIds.length > 0)
-      {
-        try
-        {
-          const groupId = await chrome.tabs.group({
-            tabIds: newTabIds,
-            createProperties: { windowId: this.windowId },
-          });
-          await chrome.tabGroups.update(groupId, {
-            title: this.snapshot.space.name,
-            color: toChromeColor(this.snapshot.space.color),
-          });
-
-          if (import.meta.env.DEV)
-          {
-            console.log(`[DeleteSpaceAction] undo: created group "${this.snapshot.space.name}" (id=${groupId})`);
-          }
-        }
-        catch (err)
-        {
-          console.error('[DeleteSpaceAction] undo: failed to create tab group:', err);
-        }
-      }
     }
 
     if (import.meta.env.DEV)

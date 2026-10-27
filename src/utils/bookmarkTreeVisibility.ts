@@ -10,6 +10,20 @@ export interface VisibleBookmarkChild<TNode extends BookmarkTreeNodeLike> {
 }
 
 export type BookmarkRowClickIntent = 'toggle-folder' | 'select-only' | 'open-bookmark';
+export type BookmarkRowKeyIntent =
+  | 'toggle-folder'
+  | 'expand-folder'
+  | 'collapse-folder'
+  | 'open-bookmark'
+  | 'none';
+
+/**
+ * Space 绑定的书签根文件夹只负责界定范围，不作为侧边栏中的可见行。
+ */
+export const getVisibleSpaceRootItems = <TNode extends BookmarkTreeNodeLike>(
+  spaceRoot: TNode,
+): TNode[] =>
+  spaceRoot.children ? [...spaceRoot.children] as TNode[] : [];
 
 /**
  * 返回文件夹当前应渲染的子节点。
@@ -80,4 +94,34 @@ export const resolveBookmarkRowClickIntent = (
   }
 
   return isFolder ? 'toggle-folder' : 'open-bookmark';
+};
+
+/**
+ * 将键盘输入解析为与 Arc 一致的文件夹和固定页面动作。
+ */
+export const resolveBookmarkRowKeyIntent = (
+  isFolder: boolean,
+  isExpanded: boolean,
+  key: string,
+  hasModifier: boolean,
+): BookmarkRowKeyIntent =>
+{
+  if (hasModifier) return 'none';
+
+  if (key === 'Enter' || key === ' ')
+  {
+    return isFolder ? 'toggle-folder' : 'open-bookmark';
+  }
+
+  if (isFolder && key === 'ArrowRight' && !isExpanded)
+  {
+    return 'expand-folder';
+  }
+
+  if (isFolder && key === 'ArrowLeft' && isExpanded)
+  {
+    return 'collapse-folder';
+  }
+
+  return 'none';
 };

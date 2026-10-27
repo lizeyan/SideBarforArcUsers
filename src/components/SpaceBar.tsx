@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable';
-import { Plus } from 'lucide-react';
+import { FolderPlus, LayoutGrid, Plus } from 'lucide-react';
 import { SpaceIcon } from './SpaceIcon';
 import { useSpacesContext, Space } from '../contexts/SpacesContext';
 import { useBookmarkTabsContext } from '../contexts/BookmarkTabsContext';
@@ -10,6 +10,9 @@ import { DragData, DragFormat, DropData, DropPosition, getItemsByFormat, getPrim
 import { moveTabToSpace, createTabInSpace } from '../utils/tabOperations';
 import { CloseTabAction } from '../actions/closeTabAction';
 import { ConfirmDeleteDialog } from './ConfirmDeleteDialog';
+import { BookmarkCreateFolderModal } from './BookmarkCreateFolderModal';
+import { useBookmarks } from '../hooks/useBookmarks';
+import * as DropdownMenu from './menu/DropdownMenu';
 import type { UndoableAction } from '../actions/types';
 
 interface SpaceBarProps
@@ -29,7 +32,8 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
   onPerformAction,
 }) =>
 {
-  const { spaces, activeSpaceId, switchToSpace, moveSpace, getTabIdsInSpace, windowId } = useSpacesContext();
+  const { spaces, activeSpace, activeSpaceId, switchToSpace, moveSpace, getTabIdsInSpace, windowId } = useSpacesContext();
+  const { findFolderBySegments, createFolder } = useBookmarks();
   const { getItemKeyForTab, restoreItemAssociation } = useBookmarkTabsContext();
   const { activeDragData, overId, dropPosition, registerDropHandler, unregisterDropHandler } = useUnifiedDnd();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -37,6 +41,7 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
     isOpen: boolean;
     tabIds: number[];
   }>({ isOpen: false, tabIds: [] });
+  const [creatingFolderParentId, setCreatingFolderParentId] = useState<string | null>(null);
 
   // Auto-scroll to make active space visible
   useEffect(() =>
@@ -57,6 +62,25 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
     // Tab group is NOT created on space switch
     // It will be created when first tab/bookmark is opened
   };
+
+  const handleCreateFolder = useCallback(() =>
+  {
+    const spaceRoot = findFolderBySegments(activeSpace.bookmarkFolderSegments ?? []);
+    if (spaceRoot)
+    {
+      setCreatingFolderParentId(spaceRoot.id);
+    }
+  }, [activeSpace.bookmarkFolderSegments, findFolderBySegments]);
+
+  const handleSaveFolder = useCallback((parentId: string, title: string) =>
+  {
+    createFolder(parentId, title);
+  }, [createFolder]);
+
+  const handleCreateTab = useCallback(() =>
+  {
+    chrome.tabs.create({ active: true, windowId: windowId ?? undefined });
+  }, [windowId]);
 
   const handleDelete = (space: Space) =>
   {
@@ -250,22 +274,37 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
           </SortableContext>
         </div>
 
-        {/* Fixed "+" button */}
+        {/* Arc-style create menu */}
         <div className="arc-create-space flex items-center px-1">
-          <button
-            onClick={onCreateSpace}
-            title="Create new space"
-            className={clsx(
-              "p-1.5 rounded",
-              "text-gray-500 dark:text-gray-400",
-              "hover:text-gray-900 dark:hover:text-gray-100",
-              "hover:bg-gray-200 dark:hover:bg-gray-700",
-              "transition-all duration-150",
-              "focus:outline-none"
-            )}
-          >
-            <Plus size={16} />
-          </button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                title="Create"
+                aria-label="Create"
+                className={clsx(
+                  "p-1.5 rounded",
+                  "text-gray-500 dark:text-gray-400",
+                  "hover:text-gray-900 dark:hover:text-gray-100",
+                  "hover:bg-gray-200 dark:hover:bg-gray-700",
+                  "transition-all duration-150",
+                  "focus:outline-none"
+                )}
+              >
+                <Plus size={18} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end">
+              <DropdownMenu.Item onSelect={onCreateSpace}>
+                <LayoutGrid size={14} className="mr-2" /> New Space
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={handleCreateFolder}>
+                <FolderPlus size={14} className="mr-2" /> New Folder
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={handleCreateTab}>
+                <Plus size={14} className="mr-2" /> New Tab
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
         </div>
       </div>
 
@@ -276,6 +315,13 @@ export const SpaceBar: React.FC<SpaceBarProps> = ({
         details="This will close the window."
         onConfirm={handleConfirmCloseAll}
         onClose={() => setConfirmCloseAllDialog({ isOpen: false, tabIds: [] })}
+      />
+
+      <BookmarkCreateFolderModal
+        isOpen={creatingFolderParentId !== null}
+        parentId={creatingFolderParentId}
+        onSave={handleSaveFolder}
+        onClose={() => setCreatingFolderParentId(null)}
       />
     </>
   );

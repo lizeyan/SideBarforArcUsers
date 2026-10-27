@@ -94,8 +94,7 @@ export type SpaceMessageActionType = typeof SpaceMessageAction[keyof typeof Spac
  * Per-window space state managed by background.ts.
  *
  * Space ↔ Chrome tab group linking:
- * - Spaces link to Chrome tab groups by matching Space.name to group.title
- * - This allows automatic reconnection after Chrome restart
+ * - Group titles are presentation only and are used once to recover a missing/invalid mapping
  * - Each window can have its own group for the same Space
  */
 export interface SpaceWindowState

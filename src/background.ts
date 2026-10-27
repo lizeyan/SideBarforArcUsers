@@ -1,7 +1,6 @@
-import { SpaceMessageAction, Space } from './utils/spaceMessages';
+import { SpaceMessageAction } from './utils/spaceMessages';
 import { FOLLOW_ACTIVE_TAB_KEY, parseFollowActiveTabMode } from './utils/followActiveTab';
-import { getTabAssociations, saveTabAssociationBackup, removeTabAssociationBackup, updateTabAssociationBackupIndices, removeWindowAssociationBackup, restoreTabAssociationBackup, WAIT_FOR_TAB_ASSOCIATIONS_READY } from './utils/tabAssociations';
-import { toChromeColor } from './utils/groupColors';
+import { getTabAssociations, storeTabAssociation, removeTabAssociation, saveTabAssociationBackup, removeTabAssociationBackup, updateTabAssociationBackupIndices, removeWindowAssociationBackup, restoreTabAssociationBackup, WAIT_FOR_TAB_ASSOCIATIONS_READY } from './utils/tabAssociations';
 import { fetchFaviconAsBase64, getFaviconUrl } from './utils/favicon';
 import { parseManagerActionId, RoutedManager } from './managers/proxies/messageRouting';
 import { SpaceWindowStateManager } from './managers/impl/spaceWindowStateManager';
@@ -11,60 +10,11 @@ import { TabHistoryManager } from './managers/impl/tabHistoryManager';
 import { LastAudibleTracker } from './managers/impl/lastAudibleTracker';
 import { PinnedSitesManager } from './managers/impl/pinnedSitesManager';
 import { TabAssociationReadiness } from './utils/tabAssociationReadiness';
-import { resolveTrackedTabGroupMove } from './utils/trackedTabGroupMove';
 import { resolveActiveSpaceId } from './utils/spaceSelection';
+import { findParkedReplacementTab, getEffectiveTabUrl, parseParkedTabUrl } from './utils/parkedTabAssociation';
 
 // Set side panel to open when clicking the extension toolbar button
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-
-// Feature flags
-const ENABLE_AUTO_GROUP_NEW_TABS = false;
-
-// Workaround: chrome.tabGroups.update() sets title/color internally but
-// chrome.tabGroups.query() returns stale data until manual collapse/expand.
-// See https://github.com/brave/brave-browser/issues/52949
-const ISSUE_52949_WORKAROUND = true;
-
-// =============================================================================
-// TabGroupTracker - Manages active tab group (for auto-grouping feature)
-// =============================================================================
-
-class TabGroupTracker
-{
-  static STORAGE_KEY = 'bg_windowActiveGroups';
-
-  #activeGroups = new Map<number, number>();  // windowId -> groupId
-
-  getActiveGroup(windowId: number): number | undefined
-  {
-    return this.#activeGroups.get(windowId);
-  }
-
-  setActiveGroup(windowId: number, groupId: number): void
-  {
-    this.#activeGroups.set(windowId, groupId);
-    chrome.storage.session.set({
-      [TabGroupTracker.STORAGE_KEY]: Array.from(this.#activeGroups.entries())
-    });
-  }
-
-  removeWindow(windowId: number): void
-  {
-    this.#activeGroups.delete(windowId);
-  }
-
-  async load(): Promise<void>
-  {
-    const result = await chrome.storage.session.get([TabGroupTracker.STORAGE_KEY]);
-    if (result[TabGroupTracker.STORAGE_KEY])
-    {
-      for (const [key, value] of result[TabGroupTracker.STORAGE_KEY])
-      {
-        this.#activeGroups.set(key, value);
-      }
-    }
-  }
-}
 
 // NewsVersionChecker - Fetches latest news version from GitHub (at most once/week)
 // =============================================================================
@@ -133,63 +83,13 @@ class NewsVersionChecker
   }
 }
 
-// =============================================================================
-// Space-Group Helper Functions
-// =============================================================================
-
-// Find Chrome group by name in a window
-async function findGroupByName(windowId: number, name: string): Promise<number | undefined>
-{
-  const groups = await chrome.tabGroups.query({ windowId, title: name });
-  return groups[0]?.id;
-}
-
-// Get a space by ID from the in-memory SpaceManager cache
-async function getSpaceById(spaceId: string): Promise<Space | undefined>
-{
-  return spaceManager.getSpaces().find(s => s.id === spaceId);
-}
-
-// Find a space by name from the in-memory SpaceManager cache
-async function findSpaceByName(name: string | undefined): Promise<Space | undefined>
-{
-  if (!name) return undefined;
-  return spaceManager.getSpaces().find(s => s.name === name);
-}
-
 // Forward declaration - will be initialized below
 let tabSpaceRegistry: TabSpaceRegistry;
 
-// Get space ID for a tab at navigation time
-// Priority: live Chrome group > tab registry > 'all' for ungrouped.
-// The Chrome group is checked first because it's the tab's current ground
-// truth. The registry is a cache written once when an Arc-style bookmark tab
-// is created (see TabSpaceRegistry.register, reached via the proxy) and nothing updates
-// it if the tab is later moved to a different group - so it can only be
-// trusted as a fallback for tabs with no live group (the brief window right
-// after a bookmark tab is created before auto-grouping completes).
+// Space 归属完全由扩展自己的 TabSpaceRegistry 决定；Chrome 原生 groupId 只属于用户。
 async function getSpaceForTab(windowId: number, tabId: number): Promise<string | undefined>
 {
-  try
-  {
-    const tab = await chrome.tabs.get(tabId);
-
-    // 1. Check live Chrome group
-    if (tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE)
-    {
-      const group = await chrome.tabGroups.get(tab.groupId);
-      const space = await findSpaceByName(group.title);
-      if (space) return space.id;
-    }
-  }
-  catch { /* Tab may not exist */ }
-
-  // 2. Fall back to tab registry (no live group to consult)
-  const registeredSpace = tabSpaceRegistry.getSpace(windowId, tabId);
-  if (registeredSpace) return registeredSpace;
-
-  // 3. Ungrouped normal tab → 'all'
-  return undefined;
+  return tabSpaceRegistry.getSpace(windowId, tabId);
 }
 
 /**
@@ -232,12 +132,9 @@ async function setActiveTabAndSpace(
       spaceStateManager.setActiveSpace(tab.windowId, currentSpaceId);
     }
 
-    if (!destinationSpaceId &&
-        currentSpaceId &&
-        tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE)
+    if (!destinationSpaceId && currentSpaceId)
     {
-      // 已经活跃的遗留未分组 Tab 不会再触发 onActivated，这里直接补入当前 Space。
-      queueTabForGrouping(tab, currentSpaceId);
+      await tabSpaceRegistry.register(tab.windowId, tabId, currentSpaceId);
       destinationSpaceId = currentSpaceId;
     }
 
@@ -285,7 +182,6 @@ const historyManager = new TabHistoryManager({
   setActiveTabAndSpace,
   getSpaceForTab,
 });
-const groupTracker = new TabGroupTracker();
 const pinnedSitesManager = new PinnedSitesManager();
 // Reads the history manager's activation order, so it has to come after it.
 const lastAudibleTracker = new LastAudibleTracker(historyManager);
@@ -314,28 +210,86 @@ async function normalizeLoadedWindowSpaces(): Promise<void>
   }
 }
 
-// Promise that resolves when all state managers have loaded.
-// Event handlers must await this before accessing state to prevent race conditions
-// when the service worker restarts after being idle.
-let stateReadyResolve!: () => void;
-const stateReady = new Promise<void>((resolve) =>
+/**
+ * 将旧版尚未登记的真实 Tab 迁移到内部 Space 关联。
+ * 仅在迁移时读取已有原生组标题；迁移完成后原生组的任何变化都不再影响 Space。
+ */
+async function assignUntrackedTabsToSpaces(): Promise<void>
 {
-  stateReadyResolve = resolve;
-  // Safety timeout - don't block forever if load fails
-  setTimeout(resolve, 1000);
-});
+  const spaces = spaceManager.getSpaces();
+  if (spaces.length === 0) return;
+
+  const nameCounts = new Map<string, number>();
+  for (const space of spaces)
+  {
+    nameCounts.set(space.name, (nameCounts.get(space.name) ?? 0) + 1);
+  }
+
+  const groups = await chrome.tabGroups.query({});
+  const groupSpaceIds = new Map<number, string>();
+  for (const group of groups)
+  {
+    const space = spaces.find(item => item.name === group.title);
+    if (space && nameCounts.get(space.name) === 1) groupSpaceIds.set(group.id, space.id);
+  }
+
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs)
+  {
+    if (tab.id === undefined || tab.windowId === undefined) continue;
+    if (tabSpaceRegistry.getSpace(tab.windowId, tab.id)) continue;
+
+    const activeSpaceId = resolveActiveSpaceId(
+      spaces,
+      spaceStateManager.getActiveSpace(tab.windowId)
+    );
+    const migratedSpaceId = groupSpaceIds.get(tab.groupId) ?? activeSpaceId;
+    if (migratedSpaceId)
+    {
+      await tabSpaceRegistry.register(tab.windowId, tab.id, migratedSpaceId);
+    }
+  }
+}
+
+/**
+ * 将旧映射明确记录的 Space 原生组无损解散，再清理已停用状态。
+ * 只调用 ungroup，不关闭 Tab；没有出现在旧映射中的用户普通组不会受影响。
+ */
+async function detachLegacySpaceGroups(): Promise<void>
+{
+  const result = await chrome.storage.local.get('spaceTabGroupMappings');
+  const mappings = result.spaceTabGroupMappings as Record<string, number> | undefined;
+  const groupIds = new Set(Object.values(mappings ?? {}));
+  for (const groupId of groupIds)
+  {
+    try
+    {
+      const tabs = await chrome.tabs.query({ groupId });
+      const tabIds = tabs.flatMap(tab => tab.id === undefined ? [] : [tab.id]);
+      if (tabIds.length > 0) await chrome.tabs.ungroup(tabIds);
+    }
+    catch { /* Group may already be closed or only remain as a Saved Group shortcut. */ }
+  }
+
+  await chrome.storage.local.remove([
+    'spaceTabGroupMappings',
+    'spaceTabGroupDiagnostics',
+  ]);
+}
 
 // 固定 Tab 关联必须在 manager 数据加载后恢复；Side Panel 会显式等待这一就绪点。
 const managerLoadPromise = Promise.all([
   spaceStateManager.load(),
   spaceManager.load(),
   historyManager.load(),
-  groupTracker.load(),
   lastAudibleTracker.load(),
   pinnedSitesManager.load(),
   tabSpaceRegistry.load(),
   newsVersionChecker.load()
-]).then(normalizeLoadedWindowSpaces);
+])
+  .then(normalizeLoadedWindowSpaces)
+  .then(assignUntrackedTabsToSpaces)
+  .then(detachLegacySpaceGroups);
 
 const tabAssociationReadiness = new TabAssociationReadiness(
   () => managerLoadPromise,
@@ -343,7 +297,8 @@ const tabAssociationReadiness = new TabAssociationReadiness(
   (error) => console.error('[TabAssociationReadiness] initialization failed:', error)
 );
 
-tabAssociationReadiness.wait().then(stateReadyResolve);
+// 所有事件和消息都等待同一个真实初始化流程，避免 Tab 在归属恢复和旧组迁移中途被处理。
+const stateReady = tabAssociationReadiness.wait();
 
 // =============================================================================
 // Event Listeners
@@ -385,13 +340,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) =>
   {
     try
     {
-      const activeTab = await chrome.tabs.get(activeInfo.tabId);
-      if (activeTab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE)
-      {
-        // 没有 All 后，遗留的未分组 Tab 在首次激活时归入当前 Space。
-        queueTabForGrouping(activeTab, currentSpaceId);
-        destinationSpaceId = currentSpaceId;
-      }
+      await tabSpaceRegistry.register(activeInfo.windowId, activeInfo.tabId, currentSpaceId);
+      destinationSpaceId = currentSpaceId;
     }
     catch { /* Tab may no longer exist */ }
   }
@@ -429,17 +379,6 @@ chrome.tabs.onActivated.addListener(async (activeInfo) =>
     // Sidepanel may not be open - ignore error
   });
 
-  // Track tab group (for auto-grouping feature)
-  if (ENABLE_AUTO_GROUP_NEW_TABS)
-  {
-    chrome.tabs.get(activeInfo.tabId, (tab) =>
-    {
-      if (tab && tab.groupId !== undefined)
-      {
-        groupTracker.setActiveGroup(activeInfo.windowId, tab.groupId);
-      }
-    });
-  }
 });
 
 // Refresh tab indices in local backup for all managed tabs in a window.
@@ -468,13 +407,45 @@ async function refreshBackupIndices(windowId: number): Promise<void>
   }
 }
 
+/**
+ * 外部休眠扩展会创建 park 页面并关闭原 Tab。把固定身份迁到新 Tab，避免它重新出现在 Tabs。
+ */
+async function migrateParkedTabAssociation(tab: chrome.tabs.Tab): Promise<boolean>
+{
+  if (tab.id === undefined || tab.windowId === undefined) return false;
+
+  const parked = parseParkedTabUrl(tab.url);
+  if (!parked || parked.sourceTabId === tab.id) return false;
+
+  const associations = await getTabAssociations(tab.windowId);
+  const itemKey = associations[parked.sourceTabId];
+  if (!itemKey) return false;
+
+  // 先写入新关联再删除旧关联，侧边栏不会在两个 storage 事件之间把固定项目短暂当成普通 Tab。
+  await storeTabAssociation(tab.windowId, tab.id, itemKey);
+  await removeTabAssociation(tab.windowId, parked.sourceTabId);
+  await saveTabAssociationBackup(tab.windowId, itemKey, {
+    tabId: tab.id,
+    url: parked.originalUrl,
+    tabIndex: tab.index,
+  });
+
+  const registeredSpaceId = tabSpaceRegistry.getSpace(tab.windowId, parked.sourceTabId);
+  if (registeredSpaceId)
+  {
+    await tabSpaceRegistry.unregister(tab.windowId, parked.sourceTabId);
+    await tabSpaceRegistry.register(tab.windowId, tab.id, registeredSpaceId);
+  }
+  return true;
+}
+
 // Clean up history, last audible tracker, tab registry, and local backup when tab is closed
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) =>
 {
   await stateReady;
   historyManager.remove(removeInfo.windowId, tabId);
   lastAudibleTracker.clearIfMatches(tabId);
-  tabSpaceRegistry.unregister(removeInfo.windowId, tabId);
+  await tabSpaceRegistry.unregister(removeInfo.windowId, tabId);
 
   if (!removeInfo.isWindowClosing)
   {
@@ -482,7 +453,13 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) =>
     const itemKey = associations[tabId];
     if (itemKey)
     {
-      await removeTabAssociationBackup(removeInfo.windowId, itemKey);
+      // park 页面通常已经存在，再关闭原 Tab；优先迁移，找不到替代页才按真正关闭清理。
+      const currentTabs = await chrome.tabs.query({ windowId: removeInfo.windowId });
+      const replacement = findParkedReplacementTab(currentTabs, tabId);
+      if (!replacement || !await migrateParkedTabAssociation(replacement))
+      {
+        await removeTabAssociationBackup(removeInfo.windowId, itemKey);
+      }
     }
 
     // Any tab removal shifts indices of tabs after it
@@ -503,7 +480,6 @@ chrome.windows.onRemoved.addListener(async (windowId) =>
 
   spaceStateManager.removeWindow(windowId);
   historyManager.removeWindow(windowId);
-  groupTracker.removeWindow(windowId);
   tabSpaceRegistry.removeWindow(windowId);
   await removeWindowAssociationBackup(windowId);
 });
@@ -514,7 +490,33 @@ chrome.windows.onRemoved.addListener(async (windowId) =>
 chrome.tabs.onMoved.addListener(async (_tabId, moveInfo) =>
 {
   await stateReady;
-  await refreshBackupIndices(moveInfo.windowId);
+  await Promise.all([
+    refreshBackupIndices(moveInfo.windowId),
+    tabSpaceRegistry.refreshWindowMetadata(moveInfo.windowId),
+  ]);
+});
+
+const detachedTabSpaces = new Map<number, string>();
+
+chrome.tabs.onDetached.addListener(async (tabId, detachInfo) =>
+{
+  await stateReady;
+  const spaceId = tabSpaceRegistry.getSpace(detachInfo.oldWindowId, tabId);
+  if (!spaceId) return;
+  detachedTabSpaces.set(tabId, spaceId);
+  await tabSpaceRegistry.unregister(detachInfo.oldWindowId, tabId);
+});
+
+chrome.tabs.onAttached.addListener(async (tabId, attachInfo) =>
+{
+  await stateReady;
+  const spaceId = detachedTabSpaces.get(tabId)
+    ?? resolveActiveSpaceId(spaceManager.getSpaces(), spaceStateManager.getActiveSpace(attachInfo.newWindowId));
+  detachedTabSpaces.delete(tabId);
+  if (spaceId)
+  {
+    await tabSpaceRegistry.register(attachInfo.newWindowId, tabId, spaceId);
+  }
 });
 
 // Favicon loading Scenario 5 — see docs/favicon-loading-strategy.md
@@ -526,13 +528,18 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) =>
     lastAudibleTracker.setLastAudibleTabId(tabId);
   }
 
-  // The url/groupId/favIconUrl handlers below all need the tab - fetch it once
+  // The url/favIconUrl handlers below need the tab - fetch it once
   // and share it, instead of each handler independently re-fetching
   let tab: chrome.tabs.Tab | undefined;
-  if (changeInfo.url !== undefined || changeInfo.groupId !== undefined || changeInfo.favIconUrl !== undefined)
+  if (changeInfo.url !== undefined || changeInfo.favIconUrl !== undefined)
   {
     try { tab = await chrome.tabs.get(tabId); }
     catch { /* tab may have been closed */ }
+  }
+
+  if (tab && parseParkedTabUrl(tab.url))
+  {
+    await migrateParkedTabAssociation(tab);
   }
 
   // Update URL in local backup when a managed tab navigates
@@ -544,59 +551,20 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) =>
       const itemKey = associations[tabId];
       if (itemKey)
       {
-        saveTabAssociationBackup(tab.windowId, itemKey, { tabId, url: changeInfo.url, tabIndex: tab.index });
-      }
-    }
-    catch { /* tab may have been closed */ }
-  }
-
-  // If a tracked Arc-style bookmark/pinned tab is dragged into a Chrome group
-  // for a different space than the one it's associated with, break the
-  // association - equivalent to the user choosing "Move to Tabs" and then
-  // moving a regular tab to that space, since the tab no longer lives in its
-  // bookmark's space. Once deassociated it's a regular tab, which gets its
-  // space from its live Chrome group directly (see getSpaceForTab), so there
-  // is nothing left in tabSpaceRegistry to keep in sync - just remove it.
-  if (changeInfo.groupId !== undefined && tab?.windowId)
-  {
-    try
-    {
-      const registeredSpaceId = tabSpaceRegistry.getSpace(tab.windowId, tabId);
-      if (registeredSpaceId)
-      {
-        const space = changeInfo.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE
-          ? undefined
-          : await chrome.tabGroups.get(changeInfo.groupId).then(group => findSpaceByName(group.title));
-        const associations = await getTabAssociations(tab.windowId);
-        const moveAction = resolveTrackedTabGroupMove({
-          itemKey: associations[tabId],
-          registeredSpaceId,
-          liveSpaceId: space?.id,
+        saveTabAssociationBackup(tab.windowId, itemKey, {
+          tabId,
+          url: getEffectiveTabUrl(changeInfo.url),
+          tabIndex: tab.index,
         });
-
-        if (moveAction === 'update-space' && space)
-        {
-          tabSpaceRegistry.register(tab.windowId, tabId, space.id);
-        }
-        else if (moveAction === 'restore-space')
-        {
-          queueTabForGrouping(tab, registeredSpaceId);
-        }
-        else if (moveAction === 'deassociate')
-        {
-          tabSpaceRegistry.unregister(tab.windowId, tabId);
-          chrome.runtime.sendMessage({
-            action: SpaceMessageAction.DEASSOCIATE_TAB,
-            windowId: tab.windowId,
-            tabId
-          }).catch(() =>
-          {
-            // Sidepanel may not be open - ignore error
-          });
-        }
       }
     }
     catch { /* tab may have been closed */ }
+
+    const spaceId = tabSpaceRegistry.getSpace(tab.windowId, tabId);
+    if (spaceId)
+    {
+      await tabSpaceRegistry.register(tab.windowId, tabId, spaceId);
+    }
   }
 
   // Scenario 5: update pinned site favicon when Chrome reports a new favIconUrl
@@ -646,146 +614,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) =>
   }
 });
 
-// Queue for batching tab grouping to prevent race conditions
-interface TabGroupingRequest
-{
-  tabId: number;
-  windowId: number;
-  spaceId: string;  // Target space, captured at queue time
-  force: boolean;  // Move even if already in a different group (see queueTabForGrouping)
-}
-const groupingQueue: TabGroupingRequest[] = [];
-let isProcessingGroupingQueue = false;
-
-// Queue a tab for grouping - prevents race condition when multiple tabs created rapidly
-// spaceId is the target space to group into. If omitted (e.g. Cmd+T new tabs), falls
-// back to whichever space is currently active in this window, captured at queue time
-// (not processing time).
-//
-// An explicit spaceId means the caller has a definite target (e.g. moving a
-// bookmark's tab to match its new Space) - the request is "forced": the tab moves
-// even if it's already in a different group. Without one, only tabs still
-// ungrouped by processing time are claimed, so a queued new-tab request can't
-// race ahead of - and clobber - a group assigned in the meantime.
-function queueTabForGrouping(tab: chrome.tabs.Tab, spaceId?: string): void
-{
-  if (!tab.id || !tab.windowId) return;
-
-  const currentSpaceId = spaceStateManager.getActiveSpace(tab.windowId);
-  const targetSpaceId = resolveActiveSpaceId(
-    spaceManager.getSpaces(),
-    spaceId ?? currentSpaceId,
-  );
-  if (!targetSpaceId) return;
-
-  // 新窗口或旧 session 仍可能携带 all；首次创建 Tab 时就地迁移。
-  if (currentSpaceId !== targetSpaceId)
-  {
-    spaceStateManager.setActiveSpace(tab.windowId, targetSpaceId);
-  }
-
-  groupingQueue.push({ tabId: tab.id, windowId: tab.windowId, spaceId: targetSpaceId, force: spaceId !== undefined });
-  processGroupingQueue();
-}
-
-// Process queued tabs sequentially - prevents race condition
-async function processGroupingQueue(): Promise<void>
-{
-  if (isProcessingGroupingQueue) return;  // Already processing, items will be picked up
-  isProcessingGroupingQueue = true;
-
-  try
-  {
-    while (groupingQueue.length > 0)
-    {
-      const request = groupingQueue.shift()!;
-      await processGroupingRequest(request);
-    }
-  }
-  finally
-  {
-    isProcessingGroupingQueue = false;
-  }
-}
-
-// Process a single grouping request
-async function processGroupingRequest(request: TabGroupingRequest): Promise<void>
-{
-  const { tabId, windowId, spaceId, force } = request;
-
-  try
-  {
-    // Verify tab still exists. Skip only if already grouped and this isn't a
-    // forced move (see queueTabForGrouping) - avoids clobbering a group assigned
-    // to a newly-created tab in the gap between queueing and processing.
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE && !force) return;
-
-    const space = await getSpaceById(spaceId);
-    if (!space) return;
-
-    // Find existing Chrome group with Space's name
-    const existingGroupId = await findGroupByName(windowId, space.name);
-
-    // Already in the right group - nothing to do
-    if (existingGroupId && tab.groupId === existingGroupId) return;
-
-    if (existingGroupId)
-    {
-      await chrome.tabs.group({ tabIds: [tabId], groupId: existingGroupId });
-    }
-    else
-    {
-      const newGroupId = await chrome.tabs.group({
-        tabIds: [tabId],
-        createProperties: { windowId }
-      });
-      await chrome.tabGroups.update(newGroupId, {
-        title: space.name,
-        color: toChromeColor(space.color),
-      });
-
-      if (ISSUE_52949_WORKAROUND)
-      {
-        // Send correct group details directly — query() returns stale data for new groups
-        chrome.runtime.sendMessage({
-          type: 'TAB_GROUP_TITLE_SET',
-          groupId: newGroupId,
-          title: space.name,
-          color: toChromeColor(space.color),
-          windowId
-        }).catch(() => {});
-      }
-    }
-  }
-  catch (error)
-  {
-    if (import.meta.env.DEV) console.error('[processGroupingRequest] Failed:', error);
-  }
-}
-
-// Add new tabs to active Space's Chrome group
+// 新 Tab 直接登记到当前 Space；Chrome 原生 groupId 不参与 Space 生命周期。
 chrome.tabs.onCreated.addListener(async (tab) =>
 {
   if (!tab.id || !tab.windowId) return;
-
-  // Tab is already in a group - leave it alone
-  if (tab.groupId && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE)
-  {
-    return;
-  }
-
-  // Wait for state to load (handles service worker restart)
   await stateReady;
-
-  // Ungrouped tab - queue for grouping
-  // (processGroupingRequest will check if it's a managed tab and ungroup if needed)
-  // Mone: we need to change tab's active space group in background.ts and not in Tablist,
-  //       useTab or BookmarkTabContext because we need this to work even when the SideBar
-  //       is hidden.
-  //       e.g. user is in Space A. user hide side bar. user use Cmd+T to create new tab.
-  //            new tab should be also under Space A.
-  queueTabForGrouping(tab);
+  const targetSpaceId = resolveActiveSpaceId(
+    spaceManager.getSpaces(),
+    spaceStateManager.getActiveSpace(tab.windowId)
+  );
+  if (targetSpaceId)
+  {
+    await tabSpaceRegistry.register(tab.windowId, tab.id, targetSpaceId);
+  }
 });
 
 // =============================================================================
@@ -854,9 +695,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
     return true;  // async response
   }
 
-  // Re-queue a tab for grouping check (used by sidebar after storing association).
-  // spaceId is optional - when given (e.g. associating an existing tab with a
-  // bookmark in a specific Space's folder), it overrides the active-space fallback.
+  // 兼容旧调用名：现在只更新内部 Space 关联，不再操作 Chrome 标签组。
   if (message.action === 'queue-tab-for-grouping')
   {
     (async () =>
@@ -864,7 +703,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
       await stateReady;
       if (message.tabId && message.windowId)
       {
-        queueTabForGrouping({ id: message.tabId, windowId: message.windowId } as chrome.tabs.Tab, message.spaceId);
+        const targetSpaceId = resolveActiveSpaceId(
+          spaceManager.getSpaces(),
+          message.spaceId ?? spaceStateManager.getActiveSpace(message.windowId)
+        );
+        if (targetSpaceId)
+        {
+          await tabSpaceRegistry.register(message.windowId, message.tabId, targetSpaceId);
+        }
       }
     })();
     return;

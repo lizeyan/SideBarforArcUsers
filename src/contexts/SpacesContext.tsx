@@ -2,10 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { useBookmarkTabsContext } from './BookmarkTabsContext';
 import { useBookmarks } from '../hooks/useBookmarks';
 import { Space, ALL_SPACE } from '../utils/spaceMessages';
-import { toChromeColor } from '../utils/groupColors';
 import { spaceWindowStateProxy } from '../managers/proxies/spaceWindowStateProxy';
 import { useSpaceWindowState } from '../hooks/useSpaceWindowState';
 import { spaceManagerProxy } from '../managers/proxies/spaceManagerProxy';
+import { tabSpaceRegistryProxy } from '../managers/proxies/tabSpaceRegistryProxy';
 import { useSpaces } from '../hooks/useSpaces';
 import { resolveActiveSpaceId } from '../utils/spaceSelection';
 
@@ -257,28 +257,7 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const updatedSpaces = spaceManagerProxy.snapshot.map(s =>
       s.id === id ? { ...s, ...updates } : s
     );
-    writeSpaces(updatedSpaces);
-
-    // Sync name/color changes to Chrome group
-    if (windowId && (updates.name || updates.color))
-    {
-      try
-      {
-        // Find Chrome group with the OLD name
-        const groups = await chrome.tabGroups.query({ windowId, title: space.name });
-        if (groups.length > 0)
-        {
-          await chrome.tabGroups.update(groups[0].id, {
-            title: updates.name ?? space.name,
-            color: toChromeColor(updates.color ?? space.color),
-          });
-        }
-      }
-      catch (error)
-      {
-        if (import.meta.env.DEV) console.error('[updateSpace] Failed to sync to Chrome group:', error);
-      }
-    }
+    await writeSpaces(updatedSpaces);
   }, [getSpaceById, windowId]);
 
   // Batch-update folder path + segments for multiple spaces at once (e.g. after a folder rename)
@@ -396,7 +375,7 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     applyActiveSpace(spaceId, 'user');
   }, [applyActiveSpace]);
 
-  // Get all tabs for a space (queries Chrome groups by matching Space name to group title)
+  // Get all tabs assigned to a Space by the internal registry.
   const getTabsForSpace = useCallback(async (spaceId: string): Promise<chrome.tabs.Tab[]> =>
   {
     if (!windowId) return [];
@@ -406,12 +385,11 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     try
     {
-      // Find Chrome group with matching name
-      const groups = await chrome.tabGroups.query({ windowId, title: space.name });
-      if (groups.length === 0) return [];
-
-      // Get tabs in that group
-      return chrome.tabs.query({ groupId: groups[0].id });
+      const [tabs, assignments] = await Promise.all([
+        chrome.tabs.query({ windowId }),
+        tabSpaceRegistryProxy.getWindowAssignments(windowId),
+      ]);
+      return tabs.filter(tab => tab.id !== undefined && assignments[tab.id] === space.id);
     }
     catch
     {
@@ -429,16 +407,16 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     {
       try
       {
-        // Find Chrome group with matching name and close its tabs
-        const groups = await chrome.tabGroups.query({ windowId, title: space.name });
-        if (groups.length > 0)
+        const [tabs, assignments] = await Promise.all([
+          chrome.tabs.query({ windowId }),
+          tabSpaceRegistryProxy.getWindowAssignments(windowId),
+        ]);
+        const tabIds = tabs
+          .filter(tab => tab.id !== undefined && assignments[tab.id] === space.id)
+          .map(tab => tab.id as number);
+        if (tabIds.length > 0)
         {
-          const tabs = await chrome.tabs.query({ groupId: groups[0].id });
-          const tabIds = tabs.map(t => t.id).filter((id): id is number => id !== undefined);
-          if (tabIds.length > 0)
-          {
-            await chrome.tabs.remove(tabIds);
-          }
+          await chrome.tabs.remove(tabIds);
         }
       }
       catch (error)
@@ -462,18 +440,17 @@ export const SpacesProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const tabIdsToClose: number[] = [];
 
-    // 1. Get tabs in Chrome group matching Space name
+    // 1. 读取扩展持有的普通 Tab Space 关联。
     try
     {
-      const groups = await chrome.tabGroups.query({ windowId, title: space.name });
-      if (groups.length > 0)
+      const [tabs, assignments] = await Promise.all([
+        chrome.tabs.query({ windowId }),
+        tabSpaceRegistryProxy.getWindowAssignments(windowId),
+      ]);
+      tabs.forEach(tab =>
       {
-        const groupTabs = await chrome.tabs.query({ groupId: groups[0].id });
-        groupTabs.forEach(tab =>
-        {
-          if (tab.id !== undefined) tabIdsToClose.push(tab.id);
-        });
-      }
+        if (tab.id !== undefined && assignments[tab.id] === space.id) tabIdsToClose.push(tab.id);
+      });
     }
     catch (error)
     {

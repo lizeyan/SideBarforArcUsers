@@ -5,6 +5,7 @@
 import { TestStep } from './types';
 import { getScrollContainer, resolveSpace, resolveStringRef, resolveTabId, resolveTabRowSelector, sleep } from './stepHelpers';
 import { lastAudibleTrackerProxy } from '../../managers/proxies/lastAudibleTrackerProxy';
+import { tabSpaceRegistryProxy } from '../../managers/proxies/tabSpaceRegistryProxy';
 
 async function tabGroupTitle(tabId: number): Promise<string | undefined>
 {
@@ -23,10 +24,10 @@ export function assertTabInSpace(tabRef: string, spaceRef: string): TestStep
     {
       const tabId = resolveTabId(ctx, tabRef);
       const space = resolveSpace(ctx, spaceRef);
-      const groupTitle = await tabGroupTitle(tabId);
-      if (groupTitle !== space.name)
+      const assignments = await tabSpaceRegistryProxy.getWindowAssignments(ctx.windowId);
+      if (assignments[tabId] !== space.id)
       {
-        throw new Error(`expected tab's Chrome group title to be "${space.name}", got ${groupTitle ? `"${groupTitle}"` : '(ungrouped)'}`);
+        throw new Error(`expected internal Space ID ${space.id}, got ${assignments[tabId] ?? '(unassigned)'}`);
       }
     },
   };
@@ -51,17 +52,16 @@ export function assertTabInSpaceWithin(tabRef: string, spaceRef: string, timeout
       const space = resolveSpace(ctx, spaceRef);
       const deadline = Date.now() + timeoutMs;
 
-      // Keep checking until the tab's group title matches or time runs out.
-      let groupTitle = await tabGroupTitle(tabId);
-      while (groupTitle !== space.name && Date.now() < deadline)
+      let assignments = await tabSpaceRegistryProxy.getWindowAssignments(ctx.windowId);
+      while (assignments[tabId] !== space.id && Date.now() < deadline)
       {
         await sleep(POLL_MS);
-        groupTitle = await tabGroupTitle(tabId);
+        assignments = await tabSpaceRegistryProxy.getWindowAssignments(ctx.windowId);
       }
 
-      if (groupTitle !== space.name)
+      if (assignments[tabId] !== space.id)
       {
-        throw new Error(`expected tab's Chrome group title to be "${space.name}" within ${timeoutMs}ms, got ${groupTitle ? `"${groupTitle}"` : '(ungrouped)'}`);
+        throw new Error(`expected internal Space ID ${space.id} within ${timeoutMs}ms, got ${assignments[tabId] ?? '(unassigned)'}`);
       }
     },
   };

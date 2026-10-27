@@ -5,7 +5,7 @@
 // asks to check both (they may not be equally instrumented) - see Section A's
 // intro in docs/test/tab-space-association-test-cases.md.
 
-import { getOrCreateSpaceGroup, moveTabToSpace, regroupAssociatedTab } from '../../utils/tabOperations';
+import { moveTabToSpace, regroupAssociatedTab } from '../../utils/tabOperations';
 import { FollowActiveTabMode, FOLLOW_ACTIVE_TAB_KEY } from '../../utils/followActiveTab';
 import { TestStep } from './types';
 import { getScrollContainer, resolveSpace, resolveStringRef, resolveTabId, resolveTabRowSelector, sleep } from './stepHelpers';
@@ -205,7 +205,7 @@ export function openFillerTabsUntilScrollable(spaceRef: string): TestStep
       {
         const tab = await chrome.tabs.create({ url: testUrl(label), active: false, windowId: ctx.windowId });
         if (tab.id === undefined) throw new Error('chrome.tabs.create did not return an id');
-        await getOrCreateSpaceGroup(tab.id, space, ctx.windowId);
+        await moveTabToSpace(tab.id, space.id, ctx.spaces, ctx.windowId);
       };
 
       let opened = 0;
@@ -351,7 +351,7 @@ export function openRegularTab(opts: { url: string; spaceRef: string; tabRef: st
       const tab = await chrome.tabs.create({ url: opts.url, active: false, windowId: ctx.windowId });
       if (tab.id === undefined) throw new Error('chrome.tabs.create did not return an id');
 
-      await getOrCreateSpaceGroup(tab.id, space, ctx.windowId);
+      await moveTabToSpace(tab.id, space.id, ctx.spaces, ctx.windowId);
       ctx.refs.set(opts.tabRef, tab.id);
     },
   };
@@ -410,7 +410,7 @@ export function moveTabNative(opts: { tabRef: string; targetSpaceRef: string }):
     {
       const tabId = resolveTabId(ctx, opts.tabRef);
       const space = resolveSpace(ctx, opts.targetSpaceRef);
-      await getOrCreateSpaceGroup(tabId, space, ctx.windowId);
+      await moveTabToSpace(tabId, space.id, ctx.spaces, ctx.windowId);
     },
   };
 }

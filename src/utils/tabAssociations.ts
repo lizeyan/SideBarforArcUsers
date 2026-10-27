@@ -8,6 +8,7 @@ import type {
   WindowAssociationBackup,
 } from '../stores/tabAssociationBackupStore.ts';
 import { mergeRestoredTabAssociations } from './restoreTabAssociations.ts';
+import { getEffectiveTabUrl } from './parkedTabAssociation.ts';
 
 export type { TabAssociationBackupEntry, WindowAssociationBackup } from '../stores/tabAssociationBackupStore.ts';
 
@@ -102,7 +103,7 @@ function getDomain(url: string): string
 {
   try
   {
-    return new URL(url).hostname;
+    return new URL(getEffectiveTabUrl(url)).hostname;
   }
   catch
   {
@@ -463,7 +464,7 @@ function buildBackupFromAssociations(
     const tabId = Number(tabIdText);
     const tab = tabsById.get(tabId);
     if (!tab?.url || tab.id === undefined || tab.index === undefined) continue;
-    backup[itemKey] = { tabId: tab.id, url: tab.url, tabIndex: tab.index };
+    backup[itemKey] = { tabId: tab.id, url: getEffectiveTabUrl(tab.url), tabIndex: tab.index };
   }
   return backup;
 }

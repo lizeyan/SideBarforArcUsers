@@ -9,7 +9,7 @@ I missed Arc's sidebar after switching to Chrome in how Arc puts favorites, book
 
 - Arc-Style Persistent Tabs - Bookmarks act as live tabs. Click to open, click again to jump back. Close tabs freely—bookmarks stay in the sidebar. Tab links survive browser restarts and extension reloads.
 
-- Arc-Style Spaces - Isolated workspaces linking bookmark folders to tab groups. Switch contexts with one click. Space Navigator (Cmd+Shift+S) lets you search or jump to any space by keyboard.
+- Arc-Style Spaces - Isolated workspaces combining bookmark folders with persistent Tab assignments. Switch contexts with one click without generating duplicate Saved Tab Groups. Space Navigator (Cmd+Shift+S) lets you search or jump to any space by keyboard.
 
 - Arc-Style Unified Sidebar - Pinned favorites, bookmarks, and tabs in one vertical panel.
 
@@ -23,6 +23,6 @@ I missed Arc's sidebar after switching to Chrome in how Arc puts favorites, book
 
 - Arc Browser Import - Migrate from Arc by importing your pinned sites, spaces, and bookmarks from Arc's `StorableSidebar.json`.
 
-Open source on GitHub: https://github.com/monemone-org/ChromeSideBar
+Open source on GitHub: https://github.com/lizeyan/SideBarforArcUsers
 
-Full Changelog: https://github.com/monemone-org/ChromeSideBar/blob/main/docs/changelog.md
+Full Changelog: https://github.com/lizeyan/SideBarforArcUsers/blob/main/docs/changelog.md
