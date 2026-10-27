@@ -2,7 +2,8 @@
 
 ## update-version.sh
 
-- Updates version in `package.json` and `manifest.json`. Version format: `{major}.{minor}.{build_number}` where build_number is the git commit count of source-code-only commits. 
+- Manually increments a strict Semantic Version in `package.json`, `package-lock.json`, and `public/manifest.json`.
+- Examples: `./tools/update-version.sh patch`, `minor`, `major`, or an exact version such as `2.0.0`.
 
 ## update-news-version.sh
 
@@ -10,11 +11,11 @@
 
 ## build-release.sh
 
-Builds the extension and packages it as a zip for Chrome Web Store submission. Output goes to `releases/`.
+Builds the extension and packages the contents of `dist/` as a GitHub Release ZIP. Output goes to `releases/`.
 
 ## create-release-tag.sh
 
-Creates a local git tag with format `release-{version}` from `package.json`.
+Creates a local tag with format `v{version}` from `package.json`. GitHub Actions normally creates this tag automatically when publishing a release from `main`.
 
 ## start-test-chrome.sh
 

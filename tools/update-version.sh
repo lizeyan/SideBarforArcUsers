@@ -1,16 +1,13 @@
 #!/bin/bash
 #
-# Updates version in package.json and manifest.json
-# Format: {major}.{minor}.{build_number}
-# Build number = git commit count (source-code-only commits)
+# Manually updates the extension's strict MAJOR.MINOR.PATCH semantic version.
 #
 # Usage:
-#   ./tools/update-version.sh                      # Update build number only
-#   ./tools/update-version.sh --major 2             # Set major version to 2
-#   ./tools/update-version.sh --minor 1             # Set minor version to 1
-#   ./tools/update-version.sh --major 2 --minor 1   # Set both
-#   ./tools/update-version.sh --commit              # Update and commit
-#   ./tools/update-version.sh --major 2 -c          # Set major and commit
+#   ./tools/update-version.sh patch        # 1.2.3 -> 1.2.4
+#   ./tools/update-version.sh minor        # 1.2.3 -> 1.3.0
+#   ./tools/update-version.sh major        # 1.2.3 -> 2.0.0
+#   ./tools/update-version.sh 2.1.0        # exact version
+#   ./tools/update-version.sh patch --commit
 
 set -euo pipefail
 
@@ -18,86 +15,78 @@ cd "$(dirname "$0")/.."
 
 printHelp()
 {
-    echo "Usage: ./tools/update-version.sh [--major N] [--minor N] [--commit|-c]"
-    echo ""
-    echo "Updates version in package.json and manifest.json."
-    echo "Version format: {major}.{minor}.{build_number}"
-    echo "Build number is the git commit count of source-code-only commits."
-    echo ""
-    echo "Options:"
-    echo "  --major N       Set major version to N"
-    echo "  --minor N       Set minor version to N"
-    echo "  --commit, -c    Stage and commit the version changes"
-    echo "  --help, -h      Show this help message"
+    cat <<'EOF'
+Usage: ./tools/update-version.sh [patch|minor|major|MAJOR.MINOR.PATCH] [--commit|-c]
+
+Updates package.json, package-lock.json, and public/manifest.json.
+With no version argument, defaults to a patch increment.
+EOF
 }
 
-# Parse flags
+CURRENT_VERSION=$(node -p "require('./package.json').version")
+VERSION_SPEC="patch"
 COMMIT=false
-NEW_MAJOR=""
-NEW_MINOR=""
+
 while [ $# -gt 0 ]; do
     case "$1" in
+        patch|minor|major) VERSION_SPEC="$1" ;;
         --commit|-c) COMMIT=true ;;
         --help|-h) printHelp; exit 0 ;;
-        --major) NEW_MAJOR="$2"; shift ;;
-        --minor) NEW_MINOR="$2"; shift ;;
+        *) VERSION_SPEC="$1" ;;
     esac
     shift
 done
 
-# Get current version from package.json
-CURRENT_VERSION=$(grep '"version"' package.json | sed 's/.*: "\([^"]*\)".*/\1/')
-
-# Parse major.minor from current version (default to 1.0 if not set properly)
-if [[ "$CURRENT_VERSION" =~ ^([0-9]+)\.([0-9]+)\. ]]; then
-    MAJOR="${BASH_REMATCH[1]}"
-    MINOR="${BASH_REMATCH[2]}"
-else
-    MAJOR=1
-    MINOR=0
+if [[ ! "$CURRENT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "Current version is not strict MAJOR.MINOR.PATCH SemVer: $CURRENT_VERSION" >&2
+    exit 1
 fi
 
-# Apply overrides
-if [ -n "$NEW_MAJOR" ]; then
-    MAJOR="$NEW_MAJOR"
-fi
-if [ -n "$NEW_MINOR" ]; then
-    MINOR="$NEW_MINOR"
-fi
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
-# Get build number (count only commits that touch extension source/build files)
-BUILD=$(git rev-list --count HEAD -- src/ \
-    public/icon.png public/icon16.png public/icon32.png public/welcome/ \
-    vite.config.ts tailwind.config.js postcss.config.js \
-    tsconfig.json tsconfig.node.json .env.development index.html)
+case "$VERSION_SPEC" in
+    patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+    minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+    major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+    *) NEW_VERSION="$VERSION_SPEC" ;;
+esac
 
-# Construct new version
-NEW_VERSION="${MAJOR}.${MINOR}.${BUILD}"
-
-echo "Updating version to ${NEW_VERSION}"
-
-# Update package.json
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${NEW_VERSION}\"/" package.json
-else
-    sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${NEW_VERSION}\"/" package.json
+if [[ ! "$NEW_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "New version must be strict MAJOR.MINOR.PATCH SemVer: $NEW_VERSION" >&2
+    exit 1
 fi
 
-# Update manifest.json
-MANIFEST="public/manifest.json"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${NEW_VERSION}\"/" "$MANIFEST"
-else
-    sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${NEW_VERSION}\"/" "$MANIFEST"
-fi
+node - "$CURRENT_VERSION" "$NEW_VERSION" <<'NODE'
+const [current, next] = process.argv.slice(2);
+const parse = (value) => value.split('.').map(Number);
+const [currentMajor, currentMinor, currentPatch] = parse(current);
+const [nextMajor, nextMinor, nextPatch] = parse(next);
+const isGreater = nextMajor > currentMajor ||
+  (nextMajor === currentMajor && nextMinor > currentMinor) ||
+  (nextMajor === currentMajor && nextMinor === currentMinor && nextPatch > currentPatch);
+if (!isGreater) {
+  console.error(`New version ${next} must be greater than current version ${current}.`);
+  process.exit(1);
+}
+NODE
 
-echo "Updated package.json and manifest.json to version ${NEW_VERSION}"
-git add package.json public/manifest.json
+echo "Updating version: ${CURRENT_VERSION} -> ${NEW_VERSION}"
 
-# Commit version changes
+# npm keeps package.json and package-lock.json in sync without creating a Git tag.
+npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version >/dev/null
+
+node - "$NEW_VERSION" <<'NODE'
+const fs = require('fs');
+const version = process.argv[2];
+const path = 'public/manifest.json';
+const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
+manifest.version = version;
+fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+
+git add package.json package-lock.json public/manifest.json
+echo "Updated package.json, package-lock.json, and public/manifest.json to ${NEW_VERSION}"
+
 if [ "$COMMIT" = true ]; then
-    git commit -m "build: Bump version to ${NEW_VERSION}"
+    git commit -m "build: bump version to ${NEW_VERSION}"
 fi
-
-
-

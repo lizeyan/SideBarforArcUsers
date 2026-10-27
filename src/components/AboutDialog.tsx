@@ -4,9 +4,9 @@ import { Dialog } from './Dialog';
 import { NEWS_URL } from '../constants/urls';
 
 const ABOUT = {
-  author: 'monehsieh',
-  github: 'https://github.com/monemone-org/ChromeSideBar',
-  chromeWebStore: 'https://chromewebstore.google.com/detail/Sidebar%20for%20Arc%20Users/jmmgjadgeeicdbagekohgmaipoekgcbn',
+  author: 'lizeyan',
+  github: 'https://github.com/lizeyan/SideBarforArcUsers',
+  releases: 'https://github.com/lizeyan/SideBarforArcUsers/releases',
 };
 
 interface AboutDialogProps {
@@ -70,12 +70,12 @@ export function AboutDialog({ isOpen, onClose, onShowWelcome }: AboutDialogProps
             GitHub <ExternalLink size={12} />
           </a>
           <a
-            href={ABOUT.chromeWebStore}
+            href={ABOUT.releases}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 text-blue-600 dark:text-blue-400 hover:underline"
           >
-            Chrome Web Store <ExternalLink size={12} />
+            GitHub Releases <ExternalLink size={12} />
           </a>
         </div>
 

@@ -61,7 +61,7 @@ Only enable logging in debug build:
 
 ## Documentation
 
-- `docs/chrome-web-store-info.md` - Chrome Web Store listing (summary, description, key features, change logs)
+- `docs/github-releases.md` - GitHub Actions build, release, versioning, and installation workflow
 - `docs/features/` - Feature specs
 - `docs/state-reference.md` - Extension state reference
 

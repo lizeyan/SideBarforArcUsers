@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Creates a local git tag with format "release-{version}"
+# Creates a local git tag with format "v{semantic-version}"
 # Reads version from package.json.
 #
 # Usage:
@@ -13,7 +13,12 @@ set -eo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION=$(grep '"version"' package.json | sed 's/.*: "\([^"]*\)".*/\1/')
-TAG="release-${VERSION}"
+if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "Version must be strict MAJOR.MINOR.PATCH SemVer: $VERSION" >&2
+    exit 1
+fi
+
+TAG="v${VERSION}"
 
 if git rev-parse "$TAG" >/dev/null 2>&1; then
     echo "Tag '$TAG' already exists."
@@ -23,7 +28,7 @@ fi
 git tag "$TAG"
 echo "Created tag: $TAG"
 
-if [ "$1" = "--push" ]; then
+if [ "${1:-}" = "--push" ]; then
     git push origin "$TAG"
     echo "Pushed tag: $TAG"
 fi

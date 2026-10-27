@@ -1,0 +1,306 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: build-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Test and package
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      asset-name: ${{ steps.version.outputs.asset-name }}
+      release-exists: ${{ steps.version.outputs.release-exists }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Validate semantic version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          MANIFEST_VERSION=$(node -p "require('./public/manifest.json').version")
+
+          if [[ "$PACKAGE_VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "package.json version ($PACKAGE_VERSION) does not match public/manifest.json ($MANIFEST_VERSION)." >&2
+            exit 1
+          fi
+
+          if [[ ! "$PACKAGE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Version must be strict MAJOR.MINOR.PATCH SemVer: $PACKAGE_VERSION" >&2
+            exit 1
+          fi
+
+          TAG="v${PACKAGE_VERSION}"
+          ASSET_NAME="sidebar-for-arc-users-${PACKAGE_VERSION}.zip"
+          RELEASE_EXISTS=false
+
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            RELEASE_EXISTS=true
+          fi
+
+          IS_MAIN_PR=false
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.base_ref }}" == "main" ]]; then
+            IS_MAIN_PR=true
+          fi
+
+          IS_MAIN_PUSH=false
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            IS_MAIN_PUSH=true
+          fi
+
+          if [[ "$IS_MAIN_PR" == "true" || ( "$IS_MAIN_PUSH" == "true" && "$RELEASE_EXISTS" == "false" ) ]]; then
+            LATEST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1 || true)
+            if [[ -n "$LATEST_TAG" ]]; then
+              LATEST_VERSION=${LATEST_TAG#v}
+              node - "$PACKAGE_VERSION" "$LATEST_VERSION" <<'NODE'
+          const [next, latest] = process.argv.slice(2);
+          const parse = (value) => value.split('.').map(Number);
+          const [nextMajor, nextMinor, nextPatch] = parse(next);
+          const [oldMajor, oldMinor, oldPatch] = parse(latest);
+          const isGreater = nextMajor > oldMajor ||
+            (nextMajor === oldMajor && nextMinor > oldMinor) ||
+            (nextMajor === oldMajor && nextMinor === oldMinor && nextPatch > oldPatch);
+          if (!isGreater) {
+            console.error(`Version ${next} must be greater than the latest release ${latest}.`);
+            process.exit(1);
+          }
+          NODE
+            fi
+          fi
+
+          if [[ "$IS_MAIN_PR" == "true" && "$RELEASE_EXISTS" == "true" ]]; then
+            echo "Tag ${TAG} already exists. Bump the semantic version before merging this PR." >&2
+            exit 1
+          fi
+
+          if [[ "$IS_MAIN_PUSH" == "true" && "$RELEASE_EXISTS" == "true" && "${{ github.run_attempt }}" == "1" ]]; then
+            echo "Tag ${TAG} already exists. Direct pushes to main must bump the semantic version." >&2
+            exit 1
+          fi
+
+          echo "version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "asset-name=${ASSET_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release-exists=${RELEASE_EXISTS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build production extension
+        run: npm run build
+
+      - name: Package ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          (
+            cd dist
+            zip -qr "../release/${{ steps.version.outputs.asset-name }}" .
+          )
+
+      - name: Upload branch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-for-arc-users-${{ steps.version.outputs.version }}-${{ github.run_id }}
+          path: release/${{ steps.version.outputs.asset-name }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      (needs.build.outputs.release-exists != 'true' || github.run_attempt > 1)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Check out repository and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged extension
+        uses: actions/download-artifact@v4
+        with:
+          name: sidebar-for-arc-users-${{ needs.build.outputs.version }}-${{ github.run_id }}
+          path: release
+
+      - name: Find previous release tag
+        id: previous
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_TAG="${{ needs.build.outputs.tag }}"
+          PREVIOUS_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+            | grep -v "^${CURRENT_TAG}$" \
+            | head -n 1 || true)
+          echo "tag=${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release from merged PR content
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_ASSET: release/${{ needs.build.outputs.asset-name }}
+          RELEASE_ASSET_NAME: ${{ needs.build.outputs.asset-name }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = process.env.RELEASE_TAG;
+            const version = process.env.RELEASE_VERSION;
+            const previousTag = process.env.PREVIOUS_TAG;
+
+            let commits;
+            if (previousTag) {
+              const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                owner,
+                repo,
+                basehead: `${previousTag}...${context.sha}`,
+                per_page: 100,
+              });
+              commits = comparison.data.commits;
+            } else {
+              commits = await github.paginate(github.rest.repos.listCommits, {
+                owner,
+                repo,
+                sha: context.sha,
+                per_page: 100,
+              });
+            }
+
+            const pullRequests = new Map();
+            for (const commit of commits) {
+              const associated = await github.paginate(
+                github.rest.repos.listPullRequestsAssociatedWithCommit,
+                { owner, repo, commit_sha: commit.sha, per_page: 100 }
+              );
+              for (const pr of associated) {
+                if (pr.merged_at && pr.base.ref === 'main') pullRequests.set(pr.number, pr);
+              }
+            }
+
+            const orderedPrs = [...pullRequests.values()]
+              .sort((left, right) => new Date(left.merged_at) - new Date(right.merged_at));
+
+            let body = '## Pull request summaries\n\n';
+            if (orderedPrs.length === 0) {
+              body += `- ${context.payload.head_commit?.message || context.sha}\n`;
+            } else {
+              for (const pr of orderedPrs) {
+                const description = (pr.body || '_No PR description provided._').trim().slice(0, 4000);
+                body += `### [#${pr.number}](${pr.html_url}) ${pr.title}\n\n${description}\n\n`;
+              }
+            }
+
+            try {
+              const generated = await github.request('POST /repos/{owner}/{repo}/releases/generate-notes', {
+                owner,
+                repo,
+                tag_name: tag,
+                target_commitish: context.sha,
+                ...(previousTag ? { previous_tag_name: previousTag } : {}),
+              });
+              if (generated.data.body) {
+                body += `\n## Generated changelog\n\n${generated.data.body}\n`;
+              }
+            } catch (error) {
+              core.warning(`GitHub generated notes were unavailable: ${error.message}`);
+            }
+
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
+              await github.rest.repos.updateRelease({
+                owner,
+                repo,
+                release_id: release.id,
+                name: `Side Bar for Arc Users ${tag}`,
+                body,
+                draft: false,
+                prerelease: false,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({
+                owner,
+                repo,
+                tag_name: tag,
+                target_commitish: context.sha,
+                name: `Side Bar for Arc Users ${tag}`,
+                body,
+                draft: false,
+                prerelease: false,
+              })).data;
+            }
+
+            const assetPath = process.env.RELEASE_ASSET;
+            const asset = fs.readFileSync(assetPath);
+            const existingAsset = release.assets.find(item => item.name === process.env.RELEASE_ASSET_NAME);
+            if (existingAsset) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner,
+                repo,
+                asset_id: existingAsset.id,
+              });
+            }
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              release_id: release.id,
+              name: process.env.RELEASE_ASSET_NAME,
+              data: asset,
+              headers: {
+                'content-type': 'application/zip',
+                'content-length': asset.length,
+              },
+            });
+
+            core.summary
+              .addHeading(`Released ${tag}`)
+              .addLink('Open release', release.html_url)
+              .addRaw(`\nUploaded ${process.env.RELEASE_ASSET_NAME}`)
+              .write();

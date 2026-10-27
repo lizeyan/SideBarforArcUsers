@@ -1,60 +1,78 @@
 # Side Bar for Arc Users — Arc Style
 
+[![Version](https://img.shields.io/github/package-json/v/lizeyan/SideBarforArcUsers?filename=package.json&label=version&color=4f46e5)](package.json)
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Manifest_V3-4285F4?logo=googlechrome&logoColor=white)](public/manifest.json)
+[![Build](https://github.com/lizeyan/SideBarforArcUsers/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/lizeyan/SideBarforArcUsers/actions/workflows/build-release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/lizeyan/SideBarforArcUsers?display_name=tag&sort=semver)](https://github.com/lizeyan/SideBarforArcUsers/releases/latest)
+[![Release Downloads](https://img.shields.io/github/downloads/lizeyan/SideBarforArcUsers/total)](https://github.com/lizeyan/SideBarforArcUsers/releases)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827)](https://react.dev/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-22c55e.svg)](LICENSE)
+
 An independently maintained Chrome extension with one primary goal: make tab management in Chrome feel as close to Arc as the Chrome extension platform allows.
 
-Arc is the product and interaction reference for this fork. Visual density, Favorites, pinned pages, Spaces, active-tab treatment, menus, persistence, and tab-group behavior are intentionally evaluated against Arc rather than treated as loosely inspired features.
+这是一个独立维护的 Chrome 扩展，核心目标只有一个：在 Chrome 扩展平台允许的范围内，让标签页管理体验尽可能接近 Arc。
 
-Chrome still owns the browser frame, address bar, native horizontal tab strip, and Side Panel title bar, so an extension cannot reproduce those surfaces. Everything rendered inside the extension's Side Panel is designed to minimize the remaining difference.
+Arc is the product and interaction reference for this fork. The extension-owned Side Panel is evaluated against Arc for visual density, Favorites, pinned pages, Spaces, active-tab treatment, menus, persistence, and interaction behavior. Chrome still owns the browser frame, address bar, horizontal tab strip, and Side Panel host header, so those surfaces cannot be replaced or restyled by an extension.
 
-**What it does:**
-- **Arc-style sidebar:** Favorites, pinned pages, folders, and unpinned tabs in one vertical panel
-- **Focused Spaces:** View one Space at a time, with no aggregate "All" Space
-- **Persistent pages:** Pinned bookmark pages keep their position and reopen like Arc pinned tabs
-- **Persistent Space assignment:** Tabs belong to Spaces through extension-owned state, independently of Chrome's native tab groups
-- **Tab history:** Navigate back/forward through recently used tabs
-- **Arc-like menus:** Single- and multi-selection actions follow Arc where Chrome APIs permit
-- **Backup/Restore:** Export and import everything to JSON
-- **Drag & drop:** Reorganize bookmarks, folders, tabs, and groups easily
-- **Filter & search:** Find items by text, filter by live tabs or playing audio
-- **Optional AI naming:** Rename Favorites and pinned bookmark pages through an OpenAI-compatible API
+Arc 是这个分支的产品与交互参考。扩展自己绘制的 Side Panel 会从视觉密度、Favorites、固定页面、Spaces、活跃标签样式、菜单、持久化和交互行为等方面与 Arc 对照。Chrome 顶栏、地址栏、原生横向标签栏和 Side Panel 宿主标题栏由 Chrome 绘制，扩展无法替换或修改这些区域。
 
-## Background
+## Highlights / 核心功能
+
+- **Arc-style unified sidebar / Arc 风格统一侧栏** — Favorites, pinned pages, folders, and ordinary tabs in one vertical panel. / 在一个垂直侧栏中统一管理 Favorites、固定页面、文件夹和普通标签页。
+- **Focused Spaces / 专注的 Spaces** — Show one real Space at a time, without an aggregate `All` view. / 一次只展示一个真实 Space，不保留聚合的 `All` 视图。
+- **Persistent pages / 持久固定页面** — Bookmark-backed pinned pages keep their location after the live tab closes. / 固定页面由书签承载，关闭真实 Tab 后仍保留位置并可重新打开。
+- **Independent Tab-to-Space state / 独立的 Tab-Space 归属** — Space membership survives extension reloads and browser restoration without creating duplicate Saved Tab Groups. / Space 归属由扩展独立持久化，支持扩展重载和浏览器恢复，同时不再制造重复的 Saved Tab Groups。
+- **Arc-like folder and active states / Arc 风格文件夹与活跃状态** — Collapsed folders can expose only their active descendant; active rows, icons, spacing, and menus follow Arc where Chrome APIs allow. / 折叠文件夹可只透出活跃子项，活跃行、图标、间距和菜单在 Chrome API 允许范围内与 Arc 对齐。
+- **Native Chrome groups remain user-owned / 原生标签组保持独立** — Chrome tab groups still work normally, but no longer determine Space membership. / Chrome 原生标签组仍可正常使用，但不再决定标签页属于哪个 Space。
+- **History, search, drag and drop / 历史、搜索与拖拽** — Navigate recently used tabs, filter content, and reorganize pins, bookmarks, tabs, and native groups. / 支持最近使用标签历史、内容筛选，以及 Pins、书签、Tab 和原生标签组的拖拽整理。
+- **Optional AI naming / 可选 AI 命名** — Rename Favorites and pinned pages through a user-configured OpenAI-compatible endpoint. / 可通过用户自行配置的 OpenAI 兼容接口为 Favorites 和固定页面生成名称。
+
+## Background / 背景
 
 I've been using Arc Browser for a while. When Arc paused development, I started looking at Chrome and other Chromium-based browsers. The one thing I really missed was Arc's sidebar—how it puts favorite sites, pinned pages, and tabs all in one vertical list.
 
 This fork continues that idea as a separate extension, with Arc parity as an explicit product direction rather than an occasional styling goal.
 
-## Core Goal: Stay as Close to Arc as Possible
+在使用 Arc 一段时间后，我切换回 Chrome/Chromium 浏览器时最不习惯的就是失去 Arc 的侧栏：常用网站、固定页面和临时 Tab 无法在同一个垂直结构中管理。这个独立分支延续了这种体验，并把“尽可能与 Arc 保持一致”作为明确的产品方向，而不只是偶尔模仿外观。
+
+## Core Goal / 核心目标：尽可能接近 Arc
 
 When a behavior can be implemented safely with Chrome APIs, this fork prefers Arc's behavior and terminology:
 
-- Favorites remain available across Spaces.
-- Pinned pages are backed by bookmarks so their position survives closing the live tab.
-- Unpinned tabs belong to the current Space through a persistent internal assignment that survives extension reloads and browser restoration.
-- Only one Space is visible at a time; the upstream aggregate `All` view is intentionally removed.
-- Collapsed folders can still expose the currently active pinned page, matching Arc's location cue.
-- Active rows, spacing, translucency, typography, icons, bottom Space navigation, and context menus are tuned against Arc screenshots.
+当某项行为能够通过 Chrome API 安全、稳定地实现时，本分支优先采用 Arc 的行为和术语：
 
-Platform limitations are documented rather than hidden. Features that require control over Chrome's native window chrome—such as replacing the horizontal tab strip or styling the Side Panel host header—are outside an extension's control.
+- Favorites remain available across Spaces. / Favorites 可跨 Space 使用。
+- Pinned pages use bookmarks so their position survives closing the live tab. / 固定页面由书签承载，关闭真实 Tab 后位置仍然保留。
+- Ordinary tabs use persistent internal Space assignments across reloads and restoration. / 普通 Tab 的 Space 归属由扩展持久化，可跨扩展重载和浏览器恢复。
+- Only one Space is visible at a time; the upstream aggregate `All` view is intentionally removed. / 一次只显示一个 Space，明确移除上游的聚合 `All` 视图。
+- Collapsed folders can expose the currently active pinned page as a location cue. / 折叠文件夹仍可透出当前活跃的固定页面，保留 Arc 的位置提示。
+- Active rows, spacing, translucency, typography, icons, bottom Space navigation, and context menus are tuned against Arc screenshots. / 活跃行、间距、半透明背景、字体、图标、底部 Space 导航和右键菜单均以 Arc 截图为对照调整。
 
-## Differences from Upstream
+Platform limitations are documented rather than hidden. Features that require control over Chrome's native window chrome—such as replacing the horizontal tab strip, deleting historical closed Saved Tab Group shortcuts, or styling the Side Panel host header—are outside an extension's control.
+
+平台限制会被明确说明而不是隐藏。替换 Chrome 横向标签栏、删除已经关闭的历史 Saved Tab Group 快捷项、修改 Side Panel 宿主标题栏等能力不在扩展可控制范围内。
+
+## Differences from Upstream / 与上游的差异
 
 This repository is a standalone fork of [monemone-org/ChromeSideBar](https://github.com/monemone-org/ChromeSideBar). It is maintained independently and is not intended to be merged back upstream.
 
+本仓库是 [monemone-org/ChromeSideBar](https://github.com/monemone-org/ChromeSideBar) 的独立分支，单独维护，不计划合并回上游。
+
 The following differences describe this fork relative to the upstream version it was based on:
 
-| Area | This fork |
+| Area / 领域 | This fork / 本分支 |
 | --- | --- |
-| Product direction | Arc fidelity is the primary goal for interaction, terminology, layout, and visual treatment. |
-| Extension identity | Uses the `Side Bar for Arc Users — Arc Style` name and is packaged as a separate extension. |
-| Spaces | Removes the visible `All` Space. The sidebar, swipe navigation, and Space Navigator show one real Space at a time. Legacy `all` state migrates to the first real Space. |
-| Space tab ownership | Space membership is stored independently from Chrome native tab groups. Native groups remain fully user-owned and can span tabs from different Spaces without changing their Space assignment. |
-| Pinned-page persistence | Bookmark/Favorite-to-tab associations use session state plus a local recovery backup, so closing and reopening the Side Panel does not duplicate pinned pages in the Tabs section. |
-| Arc-style tree behavior | Clicking a folder row expands or collapses it. A collapsed folder can surface its active pinned descendant as a single inset card. |
-| Context menus | Pinned-page single and multi-selection menus follow Arc's supported actions, including `New Folder with N Items`, move, duplicate, mute, share, and remove-pin behavior. Unsupported Arc-only features such as Split View and Customize Page are deliberately omitted. |
-| Visual system | Adds Arc-oriented colors, translucency, row geometry, Favorites grid, active-page cards, folder icons, spacing, and bottom Space navigation. |
-| Startup performance | Shares bookmark/tab subscriptions, restores associations concurrently, lazy-loads secondary dialogs, and includes Performance Timeline marks for cold-start diagnosis. |
-| AI naming | Adds optional manual or automatic naming for Favorites and bookmark-backed pinned pages through configurable OpenAI-compatible Responses or Chat Completions APIs. |
+| Product direction / 产品方向 | Arc fidelity is the primary goal for interaction, terminology, layout, and visuals.<br>以 Arc 的交互、术语、布局和视觉一致性为主要目标。 |
+| Extension identity / 扩展身份 | Packaged and released independently as `Side Bar for Arc Users — Arc Style`.<br>以独立扩展 `Side Bar for Arc Users — Arc Style` 打包和发布。 |
+| Spaces | Removes the visible `All` Space and keeps navigation on one real Space.<br>移除可见的 `All` Space，导航始终停留在一个真实 Space。 |
+| Space tab ownership / Space 归属 | Stored independently from Chrome native groups; native groups remain user-owned.<br>Space 归属独立存储，Chrome 原生标签组保持为用户自己的分组。 |
+| Pinned-page persistence / 固定页面持久化 | Recovers bookmark/Favorite tab identity after Side Panel reopen and suspended-tab replacement.<br>Side Panel 重开或外部休眠扩展替换 Tab 后仍可恢复固定页面身份。 |
+| Arc-style tree behavior / Arc 风格树结构 | Folder-row toggling, active-descendant peek, keyboard navigation, and Arc-like folder icons.<br>支持整行折叠、活跃子项透出、键盘导航和 Arc 风格文件夹图标。 |
+| Context menus / 右键菜单 | Adds supported Arc actions such as `New Folder with N Items`; omits unavailable Split View and Customize Page.<br>补充 `New Folder with N Items` 等可实现动作，明确不实现 Chrome 无法承载的 Split View 与 Customize Page。 |
+| Visual system / 视觉系统 | Arc-oriented colors, translucency, row geometry, Favorites grid, active cards, spacing, and bottom navigation.<br>采用 Arc 风格颜色、半透明、行尺寸、Favorites 网格、活跃卡片、间距和底部导航。 |
+| Startup performance / 启动性能 | Shared subscriptions, concurrent recovery, lazy dialogs, and Performance Timeline diagnostics.<br>共享订阅、并发恢复、对话框懒加载和 Performance Timeline 冷启动诊断。 |
+| AI naming / AI 命名 | Optional manual or automatic naming through a configurable OpenAI-compatible API.<br>支持通过可配置的 OpenAI 兼容接口手动或自动生成名称。 |
 
 The upstream remote is retained for reference and attribution, but releases from this repository are made from this fork's own `main` branch.
 
@@ -253,38 +271,71 @@ Built with the usual modern web stack:
 
 ## Documentation
 
-- `docs/chrome-web-store-info.md` - Chrome Web Store listing (summary, description, key features, change logs)
+- [`docs/github-releases.md`](docs/github-releases.md) - GitHub Release, versioning, and installation details / GitHub Release、版本与安装说明
+- [`PRIVACY.md`](PRIVACY.md) - Privacy policy / 隐私政策
 - `docs/features/` - Feature specs
 - `docs/state-reference.md` - Extension state reference
 
+## Install from GitHub Releases / 从 GitHub Release 安装
 
-## Setup & Build
+This fork is distributed as a ZIP attached to GitHub Releases. It is an unpacked Chrome extension, so Chrome will not install or update it automatically.
 
-### Prerequisites
-- Node.js (v18+)
+这个独立分支通过 GitHub Release 附带的 ZIP 分发。它属于 Chrome 的“已解压扩展程序”，因此 Chrome 不会自动安装或自动更新。
+
+1. Open the [Releases page](https://github.com/lizeyan/SideBarforArcUsers/releases) and download `sidebar-for-arc-users-{version}.zip` from the latest release.<br>
+   打开 [Releases 页面](https://github.com/lizeyan/SideBarforArcUsers/releases)，下载最新版本的 `sidebar-for-arc-users-{version}.zip`。
+2. Extract the ZIP to a stable local folder; do not select the ZIP itself.<br>
+   将 ZIP 解压到一个固定目录；不要直接选择 ZIP 文件。
+3. Open `chrome://extensions/` and enable **Developer mode**.<br>
+   打开 `chrome://extensions/`，开启右上角的**开发者模式**。
+4. Click **Load unpacked** and select the extracted folder containing `manifest.json`.<br>
+   点击**加载已解压的扩展程序**，选择包含 `manifest.json` 的解压目录。
+5. Click the extension icon or press `Cmd+Shift+E` / `Ctrl+Shift+E` to open the sidebar.<br>
+   点击扩展图标，或按 `Cmd+Shift+E` / `Ctrl+Shift+E` 打开侧栏。
+
+### Updating / 更新
+
+Download and extract the newer release. If you replace the previous folder in place, open `chrome://extensions/` and click **Reload** on the extension card. If the extracted path changes, remove the old unpacked extension and load the new folder.
+
+下载并解压新版本。如果直接覆盖原目录，请打开 `chrome://extensions/` 并点击扩展卡片上的**重新加载**；如果解压目录发生变化，请移除旧的已解压扩展，再加载新目录。
+
+See [GitHub Release distribution](docs/github-releases.md) for the release workflow, Semantic Version policy, artifact behavior, and security notes.
+
+完整的自动发布流程、Semantic Version 规则、分支 Artifact 行为和安全说明见 [GitHub Release 发布文档](docs/github-releases.md)。
+
+Every branch and pull request also produces a temporary ZIP under its GitHub Actions run. Only `main` publishes permanent Release assets.
+
+每个分支和 PR 都会在对应的 GitHub Actions Run 中生成临时 ZIP Artifact；只有 `main` 会发布永久的 GitHub Release 资产。
+
+## Setup & Build / 安装与构建
+
+### Prerequisites / 环境要求
+- Node.js (v22+ for the TypeScript test runner)
 - npm
 
-### Installation
+### Installation / 安装依赖
 ```bash
 npm install
 ```
 
-### Build
+### Build / 构建
 ```bash
 npm run build
 npm run build:debug
 ```
-Outputs production build to `dist/` folder.
+Outputs the production build to `dist/`. / 正式构建输出到 `dist/`。
 
-## Load in Chrome
+## Load in Chrome / 在 Chrome 中本地加载
 
-1. Go to `chrome://extensions/`
-2. Turn on **Developer mode** (top-right toggle)
-3. Click **Load unpacked** and select the `dist/` folder
-4. Click the extension icon or hit `Cmd+Shift+E` to open the sidebar
+1. Go to `chrome://extensions/`. / 打开 `chrome://extensions/`。
+2. Turn on **Developer mode**. / 开启右上角的**开发者模式**。
+3. Click **Load unpacked** and select `dist/`. / 点击**加载已解压的扩展程序**并选择 `dist/`。
+4. Click the extension icon or press `Cmd+Shift+E`. / 点击扩展图标或按 `Cmd+Shift+E` 打开侧栏。
 
-## Upstream and Attribution
+## Upstream and Attribution / 上游与致谢
 
 This fork is based on [monemone-org/ChromeSideBar](https://github.com/monemone-org/ChromeSideBar). Thanks to the upstream project for the original extension architecture and feature foundation.
 
 Install this fork from a release produced by this repository, or build it locally using the instructions above. The upstream Chrome Web Store listing installs the upstream extension, not this Arc-focused fork.
+
+请安装本仓库自行发布的版本，或按上述步骤本地构建。上游的 Chrome Web Store 条目安装的是上游扩展，并非这个以 Arc 一致性为目标的独立分支。

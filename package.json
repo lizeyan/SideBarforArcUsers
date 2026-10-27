@@ -1,10 +1,12 @@
 {
   "name": "chrome-sidebar",
   "private": true,
-  "version": "1.0.349",
+  "version": "1.0.350",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit --pretty false",
     "build": "tsc && vite build",
     "build:debug": "tsc && vite build --mode development",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",

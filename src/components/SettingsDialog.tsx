@@ -445,7 +445,7 @@ export function SettingsDialog({
                 </button>
               </div>
               <p className="mt-1 text-gray-500 dark:text-gray-400">
-                Stored locally by the extension. It is never sent to the page being renamed.
+                Stored locally and sent only to your configured API endpoint for AI requests. It is never sent to the page being renamed.
               </p>
             </div>
 
