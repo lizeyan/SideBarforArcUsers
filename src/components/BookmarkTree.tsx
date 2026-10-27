@@ -51,7 +51,7 @@ import {
 } from '@dnd-kit/core';
 import { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import { useUnifiedDnd, DropHandler } from '../contexts/UnifiedDndContext';
-import { DragData, DragFormat, DragItem, DropData, createBookmarkDragData, createBookmarkDragItem, acceptsFormatsIf, getPrimaryItem, getItemsByFormat, hasFormat } from '../types/dragDrop';
+import { DragData, DragFormat, DragItem, DropData, createBookmarkDragData, createBookmarkDragItem, acceptsFormats, acceptsFormatsIf, getPrimaryItem, getItemsByFormat, hasFormat } from '../types/dragDrop';
 import { getFaviconUrl } from '../utils/favicon';
 import { saveTabGroupAsBookmarkFolder } from '../utils/bookmarkOperations';
 import { useFindSpaceForFolder } from '../hooks/useFindSpaceForFolder';
@@ -63,8 +63,11 @@ import { resolveNewFolderParentId } from '../utils/newFolderSelection';
 import { resolveBookmarkRowVisualState } from '../utils/bookmarkRowVisualState';
 import {
   getVisibleBookmarkChildren,
+  getVisibleSpaceRootItems,
   resolveBookmarkRowClickIntent,
+  resolveBookmarkRowKeyIntent,
 } from '../utils/bookmarkTreeVisibility';
+import { resolveArcFolderIconState } from '../utils/folderIconState';
 
 // Standard Chrome bookmark folder IDs
 const BOOKMARKS_BAR_ID = '1';
@@ -181,6 +184,7 @@ interface BookmarkRowProps {
   onRemoveSelectedPins?: () => void;
   isMuted?: boolean;
   isActivePeek?: boolean;
+  hasActivePeek?: boolean;
   allSelectedAreBookmarks?: boolean;
   selectedLiveBookmarkCount?: number;
   allSelectedLiveBookmarksMuted?: boolean;
@@ -249,6 +253,7 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
   onRemoveSelectedPins,
   isMuted,
   isActivePeek,
+  hasActivePeek,
   allSelectedAreBookmarks,
   selectedLiveBookmarkCount = 0,
   allSelectedLiveBookmarksMuted,
@@ -352,8 +357,55 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
     }
   };
 
+  const handleRowKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) =>
+  {
+    const intent = resolveBookmarkRowKeyIntent(
+      isFolder,
+      !!expandedState[node.id],
+      e.key,
+      e.metaKey || e.ctrlKey || e.shiftKey || e.altKey,
+    );
+    if (intent === 'none') return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (intent === 'toggle-folder')
+    {
+      toggleFolder(node.id, !expandedState[node.id]);
+      return;
+    }
+    if (intent === 'expand-folder')
+    {
+      toggleFolder(node.id, true);
+      return;
+    }
+    if (intent === 'collapse-folder')
+    {
+      toggleFolder(node.id, false);
+      return;
+    }
+
+    if (node.url && bookmarkOpenMode === 'arc' && onOpenBookmark)
+    {
+      onOpenBookmark(node.id, node.url);
+    }
+    else if (node.url && bookmarkOpenMode === 'activeTab')
+    {
+      chrome.tabs.update({ url: node.url });
+    }
+    else if (node.url)
+    {
+      chrome.tabs.create({ url: node.url, active: true, windowId: windowId ?? undefined });
+    }
+  };
+
   const icon = isFolder ? (
-    <SpaceFolderIcon space={matchingSpace} size={20} />
+    <SpaceFolderIcon
+      space={matchingSpace}
+      size={20}
+      state={resolveArcFolderIconState(!!expandedState[node.id], !!hasActivePeek)}
+    />
   ) : node.url ? (
     <img
       src={getFaviconUrl(node.url)}
@@ -382,6 +434,25 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
 
   const actions = (
     <div className="flex items-center">
+      {isFolder && expandedState[node.id] && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleFolder(node.id, false);
+          }}
+          className="arc-folder-collapse-action p-1.5 rounded bg-transparent"
+          title="Collapse folder"
+          aria-label="Collapse folder"
+        >
+          <Minus size={15} strokeWidth={2.25} />
+        </button>
+      )}
+      {isFolder && !expandedState[node.id] && hasActivePeek && (
+        <span className="arc-folder-collapse-action p-1.5" aria-hidden="true">
+          <Minus size={15} strokeWidth={2.25} />
+        </span>
+      )}
       {/* Pin button - visible on hover */}
       {!isFolder && onPin && node.url && (
         <button
@@ -465,7 +536,11 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
               isExpanded={expandedState[node.id]}
               onToggle={() => toggleFolder(node.id, !expandedState[node.id])}
               hideChevronSlot
+              role="treeitem"
+              tabIndex={0}
+              aria-expanded={isFolder ? !!expandedState[node.id] : undefined}
               onClick={handleRowClick}
+              onKeyDown={handleRowKeyDown}
               onDoubleClick={() => {
                 if (node.url && bookmarkOpenMode === 'arc' && onOpenBookmark) {
                   onOpenBookmark(node.id, node.url);
@@ -481,6 +556,8 @@ const BookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>(({
               dndListeners={listeners}
               data-bookmark-id={node.id}
               data-is-folder={isFolder}
+              data-expanded={isFolder && expandedState[node.id] ? 'true' : undefined}
+              data-has-active-peek={isFolder && hasActivePeek ? 'true' : undefined}
               data-active-peek={isActivePeek || undefined}
               data-depth={depth}
               data-dnd-id={dndId}
@@ -773,6 +850,36 @@ const DraggableBookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>((props
 });
 DraggableBookmarkRow.displayName = 'DraggableBookmarkRow';
 
+/**
+ * Space 根文件夹不渲染成可见行，但仍保留一个根级拖拽落点。
+ */
+const SpaceRootDropTarget = ({ node }: { node: chrome.bookmarks.BookmarkTreeNode }) =>
+{
+  const { setNodeRef } = useDroppable({
+    id: `bookmark-${node.id}`,
+    data: {
+      zone: 'bookmarkTree',
+      targetId: node.id,
+      canAccept: acceptsFormats(DragFormat.BOOKMARK, DragFormat.TAB_GROUP, DragFormat.TAB, DragFormat.URL),
+      isFolder: true,
+      isExpanded: true,
+      depth: -1,
+      parentId: node.parentId,
+    } as DropData,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className="arc-space-root-drop-target"
+      data-bookmark-id={node.id}
+      data-is-folder="true"
+      data-space-root="true"
+      data-dnd-id={`bookmark-${node.id}`}
+    />
+  );
+};
+
 // --- Static Wrapper ---
 const StaticBookmarkRow = forwardRef<HTMLDivElement, BookmarkRowProps>((props, ref) => {
   return <BookmarkRow ref={ref} {...props} />;
@@ -813,9 +920,19 @@ const BookmarkItem = (props: BookmarkRowProps) => {
   return (
     <>
       {isInView ? (
-        <DraggableBookmarkRow ref={ref} {...props} matchingSpace={matchingSpace} />
+        <DraggableBookmarkRow
+          ref={ref}
+          {...props}
+          matchingSpace={matchingSpace}
+          hasActivePeek={visibleChildren.some(child => child.isActivePeek)}
+        />
       ) : (
-        <StaticBookmarkRow ref={ref} {...props} matchingSpace={matchingSpace} />
+        <StaticBookmarkRow
+          ref={ref}
+          {...props}
+          matchingSpace={matchingSpace}
+          hasActivePeek={visibleChildren.some(child => child.isActivePeek)}
+        />
       )}
 
       {visibleChildren.length > 0 && (
@@ -947,11 +1064,11 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
     {
       const groupId = await chrome.tabs.group({
         tabIds: createdTabIds,
-        createProperties: windowId ? { windowId } : undefined
+        createProperties: windowId ? { windowId } : undefined,
       });
       await chrome.tabGroups.update(groupId, {
         title: folderName,
-        color: getRandomGroupColor()
+        color: getRandomGroupColor(),
       });
       // Activate the first tab in the group
       await chrome.tabs.update(createdTabIds[0], { active: true });
@@ -1035,11 +1152,10 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
     : null;
   const isSpaceFolderMissing = spaceHasFolder && !spaceFolder;
 
-  // Apply space filter if a space (not "all") is active
-  // Show the space folder itself (not just children) so it's always a drop target
+  // Space 根文件夹只界定内容范围，Arc 侧边栏直接展示它的子项。
   if (spaceFolder)
   {
-    visibleBookmarks = [spaceFolder];
+    visibleBookmarks = getVisibleSpaceRootItems(spaceFolder);
   }
 
   // Apply all filters in a single pass
@@ -2396,7 +2512,7 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
 
   return (
     <>
-      <div ref={bookmarkContainerRef} data-dnd-zone="bookmarkTree">
+      <div ref={bookmarkContainerRef} data-dnd-zone="bookmarkTree" role="tree">
         {visibleBookmarks.map((node) =>
         {
           const itemIndex = flatVisibleBookmarkItems.findIndex(i => i.id === node.id);
@@ -2485,6 +2601,8 @@ export const BookmarkTree = ({ onPin, onPinMultiple, hideOtherBookmarks = false,
             />
           );
         })}
+
+        {spaceFolder && <SpaceRootDropTarget node={spaceFolder} />}
 
         {/* Empty filter results message */}
         {hasFilters && !hasVisibleBookmarks && (

@@ -1,5 +1,6 @@
 import { UndoableAction } from './types';
 import { truncateTitle } from '../utils/truncateTitle';
+import { tabSpaceRegistryProxy } from '../managers/proxies/tabSpaceRegistryProxy';
 
 interface TabSnapshot
 {
@@ -11,6 +12,7 @@ interface TabSnapshot
   groupTitle?: string;       // For group recreation on undo
   groupColor?: chrome.tabGroups.ColorEnum;
   itemKey?: string;          // "bookmark-{id}" or "pinned-{id}"
+  spaceId?: string;
 }
 
 /**
@@ -45,6 +47,7 @@ export class CloseTabAction implements UndoableAction
     // Snapshot each tab before closing
     this.snapshots = [];
     const groupCache = new Map<number, { title: string; color: chrome.tabGroups.ColorEnum }>();
+    const assignments = await tabSpaceRegistryProxy.getWindowAssignments(this.windowId);
 
     for (const tabId of this.tabIds)
     {
@@ -57,6 +60,7 @@ export class CloseTabAction implements UndoableAction
           title: tab.title || '',
           index: tab.index,
           groupId: tab.groupId ?? -1,
+          spaceId: assignments[tabId],
         };
 
         // Capture group info (cached per groupId)
@@ -153,6 +157,11 @@ export class CloseTabAction implements UndoableAction
 
         if (!newTab.id) continue;
 
+        if (snapshot.spaceId)
+        {
+          await tabSpaceRegistryProxy.register(this.windowId, newTab.id, snapshot.spaceId);
+        }
+
         if (import.meta.env.DEV)
         {
           console.log(`[CloseTabAction] undo: created tab "${snapshot.title}" → id=${newTab.id} `
@@ -177,7 +186,11 @@ export class CloseTabAction implements UndoableAction
             try
             {
               const orig = await chrome.tabGroups.get(snapshot.groupId);
-              if (orig) targetGroupId = snapshot.groupId;
+              // Chrome 会复用已消失的 group ID；窗口或标题不一致时不能把 Tab 放进陌生组。
+              if (orig.windowId === this.windowId && orig.title === snapshot.groupTitle)
+              {
+                targetGroupId = snapshot.groupId;
+              }
             }
             catch { /* original group gone */ }
 
@@ -188,7 +201,7 @@ export class CloseTabAction implements UndoableAction
             }
             else
             {
-              // Original group gone — create new group
+              // Restore the user's own native Chrome group. Space identity is independent.
               const newGroupId = await chrome.tabs.group({
                 tabIds: [newTab.id],
                 createProperties: { windowId: this.windowId },

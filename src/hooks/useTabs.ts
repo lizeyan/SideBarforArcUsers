@@ -218,7 +218,7 @@ export const useTabs = (windowId?: number) => {
           });
         }
 
-        // Step 3: Recreate groups and re-group tabs (in encounter order)
+        // Step 3: Recreate the user's native Chrome groups in encounter order.
         for (const origGroupId of groupOrder)
         {
           const tabIds = tabsByGroup.get(origGroupId)!;
@@ -227,26 +227,16 @@ export const useTabs = (windowId?: number) => {
           {
             chrome.tabs.group({
               tabIds,
-              createProperties: windowId ? { windowId } : undefined
+              createProperties: windowId ? { windowId } : undefined,
             }, (newGroupId) =>
             {
-              if (handleError('regroup'))
+              if (handleError('regroup')) return resolve();
+              if (!info) return resolve();
+              chrome.tabGroups.update(newGroupId, info, () =>
               {
+                handleError('update group');
                 resolve();
-                return;
-              }
-              if (info)
-              {
-                chrome.tabGroups.update(newGroupId, { title: info.title, color: info.color }, () =>
-                {
-                  handleError('update group');
-                  resolve();
-                });
-              }
-              else
-              {
-                resolve();
-              }
+              });
             });
           });
         }
@@ -317,16 +307,11 @@ export const useTabs = (windowId?: number) => {
     const tab = await chrome.tabs.get(tabId);
     chrome.tabs.group({
       tabIds: [tabId],
-      createProperties: { windowId: tab.windowId }
+      createProperties: { windowId: tab.windowId },
     }, (groupId) =>
     {
-      if (!handleError('create group'))
-      {
-        chrome.tabGroups.update(groupId, { title, color }, () =>
-        {
-          handleError('update group');
-        });
-      }
+      if (handleError('create group')) return;
+      chrome.tabGroups.update(groupId, { title, color }, () => handleError('update group'));
     });
   }, [handleError]);
 

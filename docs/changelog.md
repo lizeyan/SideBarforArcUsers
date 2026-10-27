@@ -2,8 +2,21 @@
 
 ## Latest Version
 
+- Changed: Spaces now use persistent extension-owned Tab assignments instead of creating Chrome native tab groups
+- Fixed: opening Spaces across multiple windows no longer accumulates duplicate Saved Tab Groups
+- New: Arc-style folder collapse states, active descendant peek, New Tab ordering, and one-Space-at-a-time navigation
+- Improved: fixed-page and Favorite recovery across Side Panel reopen, external tab suspension, and Chrome tab switching
+- Improved: Arc-aligned active rows, folder icons, spacing, translucency, menus, and bottom Space navigation
 - Fixed: tab history navigation (including keyboard shortcuts) and audio quick-jump now always take you to the tab, even when "Follow active tab" is Off
 - Fixed: "Show active tab" button now works when the active tab is in another space
+
+## 1.0.349
+
+- Space membership is now independent from Chrome native tab groups; native groups remain user-owned
+- Existing extension-owned live groups are ungrouped without closing their tabs during migration
+- Added persistent Tab-to-Space recovery across extension reloads, browser restoration, navigation, sorting, and cross-window moves
+- Removed the visible All Space and aligned folder, active-tab, New Tab, Favorites, and context-menu behavior more closely with Arc
+- Fixed fixed-page duplication and stale active state after reopening the Side Panel or switching through Chrome's native tab UI
 
 ## 1.0.326
 

@@ -10,7 +10,7 @@ Chrome still owns the browser frame, address bar, native horizontal tab strip, a
 - **Arc-style sidebar:** Favorites, pinned pages, folders, and unpinned tabs in one vertical panel
 - **Focused Spaces:** View one Space at a time, with no aggregate "All" Space
 - **Persistent pages:** Pinned bookmark pages keep their position and reopen like Arc pinned tabs
-- **Chrome synchronization:** Spaces map to native Chrome tab groups, including activation and move handling
+- **Persistent Space assignment:** Tabs belong to Spaces through extension-owned state, independently of Chrome's native tab groups
 - **Tab history:** Navigate back/forward through recently used tabs
 - **Arc-like menus:** Single- and multi-selection actions follow Arc where Chrome APIs permit
 - **Backup/Restore:** Export and import everything to JSON
@@ -30,7 +30,7 @@ When a behavior can be implemented safely with Chrome APIs, this fork prefers Ar
 
 - Favorites remain available across Spaces.
 - Pinned pages are backed by bookmarks so their position survives closing the live tab.
-- Unpinned tabs belong to the current Space and stay synchronized with its native Chrome tab group.
+- Unpinned tabs belong to the current Space through a persistent internal assignment that survives extension reloads and browser restoration.
 - Only one Space is visible at a time; the upstream aggregate `All` view is intentionally removed.
 - Collapsed folders can still expose the currently active pinned page, matching Arc's location cue.
 - Active rows, spacing, translucency, typography, icons, bottom Space navigation, and context menus are tuned against Arc screenshots.
@@ -48,7 +48,7 @@ The following differences describe this fork relative to the upstream version it
 | Product direction | Arc fidelity is the primary goal for interaction, terminology, layout, and visual treatment. |
 | Extension identity | Uses the `Side Bar for Arc Users — Arc Style` name and is packaged as a separate extension. |
 | Spaces | Removes the visible `All` Space. The sidebar, swipe navigation, and Space Navigator show one real Space at a time. Legacy `all` state migrates to the first real Space. |
-| Native tab groups | A Space is kept in sync with its Chrome tab group. New and legacy ungrouped tabs are assigned to the active Space when appropriate. |
+| Space tab ownership | Space membership is stored independently from Chrome native tab groups. Native groups remain fully user-owned and can span tabs from different Spaces without changing their Space assignment. |
 | Pinned-page persistence | Bookmark/Favorite-to-tab associations use session state plus a local recovery backup, so closing and reopening the Side Panel does not duplicate pinned pages in the Tabs section. |
 | Arc-style tree behavior | Clicking a folder row expands or collapses it. A collapsed folder can surface its active pinned descendant as a single inset card. |
 | Context menus | Pinned-page single and multi-selection menus follow Arc's supported actions, including `New Folder with N Items`, move, duplicate, mute, share, and remove-pin behavior. Unsupported Arc-only features such as Split View and Customize Page are deliberately omitted. |
@@ -141,7 +141,7 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 
 Organize your browsing by context with Arc-style Spaces—isolated workspaces that filter the sidebar to show only relevant bookmarks and tabs.
 
-- **What is a Space?** A Space links a bookmark folder to a Chrome tab group with a name, icon, and color
+- **What is a Space?** A Space links a bookmark folder with a persistent set of real Chrome tabs, plus a name, icon, and color
 - **One Space at a time**: There is no aggregate `All` Space; the sidebar always shows one real Space
 - **Legacy migration**: Older `all` or deleted Space state automatically resolves to the first available real Space
 - **SpaceBar**: Horizontal row of space icons at the bottom of the panel
@@ -153,19 +153,20 @@ Organize your browsing by context with Arc-style Spaces—isolated workspaces th
   - Pick a name, icon, color, and bookmark folder
   - Folder auto-creates if it doesn't exist
 - **Filtering**:
-  - Active space shows only its bookmark folder and Chrome tab group
-  - New tabs (Cmd+T) automatically join the active space's group
-  - Legacy ungrouped tabs join the current Space when first activated
+  - Active Space shows only its bookmark folder and internally assigned tabs
+  - New tabs (Cmd+T) automatically belong to the active Space without being placed in a native group
+  - Legacy tabs are migrated from prior extension state and existing Space-named groups once
   - Tab operations (Close All, Sort) only affect the current space's tabs
-- **Chrome Tab Group Integration**:
-  - Each Space links to a Chrome tab group by matching names
-  - Space remains in sidebar even when its Chrome group is empty/closed
-  - Renaming a Space updates its Chrome group name
+- **Chrome Tab Group Independence**:
+  - Native Chrome groups remain available as ordinary user-created groups inside each Space
+  - Moving, renaming, or deleting a native group does not change Space membership
+  - Upgrading from the older group-backed model ungroups only groups explicitly recorded as extension-owned; no tabs are closed
+  - Historical closed Saved Tab Group shortcuts must be removed once through Chrome because Chrome exposes no extension API for deleting them
 - **Context menu** (right-click space icon):
   - Edit (name, icon, color, bookmark folder)
   - Delete (with confirmation)
 - **Last Space protection**: The final remaining Space cannot be deleted; use `+` to create additional Spaces
-- **Multi-window**: Each window has independent Space ↔ group mappings
+- **Multi-window**: Each real Tab keeps its own Space assignment when moved between windows
 - **One folder, one Space**: a bookmark folder is assumed to belong to at most one Space. Picking the same folder for two Spaces is not blocked, but is unsupported - the extension resolves a bookmark to its Space by folder, so a shared folder resolves to whichever Space is found first.
 
 ### Import & Export

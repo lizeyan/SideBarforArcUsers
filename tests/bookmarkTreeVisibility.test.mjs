@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  getVisibleSpaceRootItems,
   getVisibleBookmarkChildren,
+  resolveBookmarkRowKeyIntent,
   resolveBookmarkRowClickIntent,
 } from '../src/utils/bookmarkTreeVisibility.ts';
 
@@ -20,6 +22,14 @@ const nestedTree = {
     },
   ],
 };
+
+test('Space 根文件夹只作为容器，侧边栏直接展示它的子项', () =>
+{
+  assert.deepEqual(
+    getVisibleSpaceRootItems(nestedTree),
+    nestedTree.children,
+  );
+});
 
 test('折叠文件夹时只透出子树里的活跃固定 Tab', () =>
 {
@@ -58,4 +68,13 @@ test('普通点击文件夹行会切换折叠状态，组合键点击仍只处�
   assert.equal(resolveBookmarkRowClickIntent(true, false), 'toggle-folder');
   assert.equal(resolveBookmarkRowClickIntent(true, true), 'select-only');
   assert.equal(resolveBookmarkRowClickIntent(false, false), 'open-bookmark');
+});
+
+test('文件夹和固定页面支持 Arc 式键盘操作', () =>
+{
+  assert.equal(resolveBookmarkRowKeyIntent(true, false, 'Enter', false), 'toggle-folder');
+  assert.equal(resolveBookmarkRowKeyIntent(true, false, 'ArrowRight', false), 'expand-folder');
+  assert.equal(resolveBookmarkRowKeyIntent(true, true, 'ArrowLeft', false), 'collapse-folder');
+  assert.equal(resolveBookmarkRowKeyIntent(false, false, ' ', false), 'open-bookmark');
+  assert.equal(resolveBookmarkRowKeyIntent(true, false, 'Enter', true), 'none');
 });

@@ -4,76 +4,14 @@
 
 import { Space } from '../contexts/SpacesContext';
 import { tabSpaceRegistryProxy } from '../managers/proxies/tabSpaceRegistryProxy';
-import { toChromeColor } from './groupColors';
-
-// Keyed by "windowId:spaceName" - deduplicates concurrent getOrCreateSpaceGroup
-// calls for a group that doesn't exist yet (see resolveGroupId). Cleared once
-// resolved, so it only matters for calls that genuinely overlap in time, not
-// a long-lived cache of every group ever created.
-const pendingGroupCreation = new Map<string, Promise<number>>();
 
 /**
- * Resolves (creating if needed) the Chrome group id for a space, coalescing
- * concurrent callers racing to create the SAME not-yet-existing group into
- * one creation instead of each seeing "no group" and creating their own.
- * The check-then-claim below has no `await` between reading and writing
- * pendingGroupCreation, so it's atomic with respect to other JS execution -
- * JS is single-threaded, so nothing else can run in that gap.
- */
-async function resolveGroupId(space: Space, windowId: number, seedTabId: number): Promise<number>
-{
-  const key = `${windowId}:${space.name}`;
-
-  let promise = pendingGroupCreation.get(key);
-  if (!promise)
-  {
-    promise = (async () =>
-    {
-      const groups = await chrome.tabGroups.query({ windowId, title: space.name });
-      if (groups.length > 0) return groups[0].id;
-
-      // Chrome has no "create an empty group" call - creating a group and
-      // adding its first tab happen together, so whichever call wins this
-      // race seeds the new group with its own tab.
-      const newGroupId = await chrome.tabs.group({
-        tabIds: [seedTabId],
-        createProperties: { windowId },
-      });
-      await chrome.tabGroups.update(newGroupId, {
-        title: space.name,
-        color: toChromeColor(space.color),
-      });
-      return newGroupId;
-    })();
-    pendingGroupCreation.set(key, promise);
-    promise.finally(() => pendingGroupCreation.delete(key));
-  }
-
-  return promise;
-}
-
-/**
- * Add a tab to a space's Chrome tab group, finding the existing group by
- * name or creating a new one (titled and colored to match the space) if
- * none exists yet in this window.
- */
-export async function getOrCreateSpaceGroup(tabId: number, space: Space, windowId: number): Promise<void>
-{
-  const groupId = await resolveGroupId(space, windowId, tabId);
-  await chrome.tabs.group({ tabIds: [tabId], groupId });
-}
-
-/**
- * Move a tab to a space's Chrome tab group.
- *
- * - If spaceId is 'all', ungroups the tab
- * - If a Chrome group with the space's name exists, adds tab to it
- * - Otherwise, creates a new Chrome group with the space's name and color
+ * Move a tab to an extension Space without changing its user-owned Chrome group.
  *
  * @param tabId - The Chrome tab ID to move
  * @param spaceId - The space ID to move to ('all' to ungroup)
  * @param spaces - Array of available spaces (excluding 'all')
- * @param windowId - The window ID for tab group queries
+ * @param windowId - The Chrome window containing the Tab
  * @returns Object with success status and optional error/toast message
  */
 export async function moveTabToSpace(
@@ -85,11 +23,11 @@ export async function moveTabToSpace(
 {
   try
   {
-    // Special case: "All" space - ungroup the tab
+    // 遗留的 All 操作只清除内部归属，不修改原生标签组。
     if (spaceId === 'all')
     {
-      await chrome.tabs.ungroup(tabId);
-      return { success: true, message: 'Removed from group' };
+      await tabSpaceRegistryProxy.unregister(windowId, tabId);
+      return { success: true, message: 'Removed from Space' };
     }
 
     const space = spaces.find(s => s.id === spaceId);
@@ -98,7 +36,7 @@ export async function moveTabToSpace(
       return { success: false, error: 'Space not found' };
     }
 
-    await getOrCreateSpaceGroup(tabId, space, windowId);
+    await tabSpaceRegistryProxy.register(windowId, tabId, space.id);
 
     return { success: true, message: `Moved to ${space.name}` };
   }
@@ -142,8 +80,7 @@ export async function regroupAssociatedTab(
   const targetSpace = await findSpaceForFolder(targetFolderId);
   if (!targetSpace) return;
 
-  tabSpaceRegistryProxy.register(windowId, tabId, targetSpace.id);
-  chrome.runtime.sendMessage({ action: 'queue-tab-for-grouping', tabId, windowId, spaceId: targetSpace.id });
+  await tabSpaceRegistryProxy.register(windowId, tabId, targetSpace.id);
 }
 
 /**

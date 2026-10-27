@@ -18,6 +18,7 @@ import { SPEAKER_ICON_SIZE } from '../constants';
 import { moveTabToSpace as moveTabToSpaceUtil } from '../utils/tabOperations';
 import { filterBookmarkableTabs, saveTabGroupAsBookmarkFolder } from '../utils/bookmarkOperations';
 import { useFindSpaceForFolder } from '../hooks/useFindSpaceForFolder';
+import { useTabSpaceAssignments } from '../hooks/useTabSpaceAssignments';
 
 // External drop target type for tab → bookmark drops
 export interface ExternalDropTarget
@@ -44,11 +45,11 @@ import { AddToGroupDialog } from './AddToGroupDialog';
 import { ChangeGroupColorDialog } from './ChangeGroupColorDialog';
 import { ExportConflictDialog, ExportConflictMode } from './ExportConflictDialog';
 import { RenameGroupDialog } from './RenameGroupDialog';
-import { Globe, Volume2, Pin, Plus, X, ArrowDownAZ, ArrowDownZA, Edit, Palette, FolderPlus, Copy, SquareStack, Bookmark, ExternalLink, Link, Check } from 'lucide-react';
-import { SectionHeader } from './SectionHeader';
+import { Globe, Volume2, Pin, Plus, X, ArrowDown, ArrowDownAZ, ArrowDownZA, Edit, Palette, FolderPlus, Copy, SquareStack, Bookmark, ExternalLink, Link, Check } from 'lucide-react';
+import { getArcTabSectionItems } from '../utils/arcTabSection';
 import { getIndentPadding } from '../utils/indent';
 import { matchesFilter } from '../utils/searchParser';
-import { filterUnmanagedTabs } from '../utils/tabVisibility';
+import { filterTabsForSpace, filterUnmanagedTabs } from '../utils/tabVisibility';
 import { moveSingleTab, moveTabAfter } from '../utils/tabMove';
 import { moveSingleGroup, moveGroupAfter } from '../utils/groupMove';
 import { DropIndicators } from './DropIndicators';
@@ -231,6 +232,8 @@ const TabRow = forwardRef<HTMLDivElement, DraggableTabProps>(({
               dndAttributes={attributes}
               dndListeners={listeners}
               className={rowClassName}
+              role="button"
+              tabIndex={0}
               onClick={(e) =>
               {
                 // Always update selection state on click
@@ -239,6 +242,14 @@ const TabRow = forwardRef<HTMLDivElement, DraggableTabProps>(({
                 // For plain clicks (no modifiers), also activate the tab
                 if (!e.metaKey && !e.ctrlKey && !e.shiftKey)
                 {
+                  onActivate(tab.id!);
+                }
+              }}
+              onKeyDown={(e) =>
+              {
+                if ((e.key === 'Enter' || e.key === ' ') && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey)
+                {
+                  e.preventDefault();
                   onActivate(tab.id!);
                 }
               }}
@@ -460,10 +471,12 @@ interface DroppableNewTabRowProps
   onClick: () => void;
   showDropIndicator: boolean;
   showDropInto: boolean;
+  menuContent: React.ReactNode;
+  onClearTabs?: () => void;
 }
 
 const DroppableNewTabRow = forwardRef<HTMLDivElement, DroppableNewTabRowProps>(
-  ({ onClick, showDropIndicator, showDropInto }, forwardedRef) =>
+  ({ onClick, showDropIndicator, showDropInto, menuContent, onClearTabs }, forwardedRef) =>
   {
     const { setNodeRef: setDropRef } = useDroppable({
       id: 'end-of-list',
@@ -493,28 +506,61 @@ const DroppableNewTabRow = forwardRef<HTMLDivElement, DroppableNewTabRowProps>(
     );
 
     return (
-      <TreeRow
-        ref={setRefs}
-        depth={0}
-        icon={<Plus size={14} />}
-        title="New Tab"
-        hasChildren={false}
-        onClick={onClick}
-        className={clsx(
-          "cursor-pointer",
-          showDropInto
-            ? "bg-blue-100 dark:bg-blue-900/50 text-gray-700 dark:text-gray-200"
-            : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-        )}
-        data-dnd-id="end-of-list"
-      >
-        {showDropIndicator && (
-          <div className="absolute left-0 right-0 top-0 h-0.5 bg-blue-500 z-20" />
-        )}
-        {showDropInto && (
-          <div className="absolute inset-0 rounded-md ring-2 ring-blue-500 pointer-events-none" />
-        )}
-      </TreeRow>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger asChild>
+          <TreeRow
+            ref={setRefs}
+            depth={0}
+            icon={<Plus size={14} />}
+            title="New Tab"
+            hasChildren={false}
+            role="button"
+            tabIndex={0}
+            onClick={onClick}
+            onKeyDown={(e) =>
+            {
+              if (e.key === 'Enter' || e.key === ' ')
+              {
+                e.preventDefault();
+                onClick();
+              }
+            }}
+            className={clsx(
+              "arc-new-tab-row cursor-pointer",
+              showDropInto
+                ? "bg-blue-100 dark:bg-blue-900/50 text-gray-700 dark:text-gray-200"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            )}
+            data-dnd-id="end-of-list"
+            actions={onClearTabs && (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClearTabs();
+                }}
+                className="arc-clear-tabs flex items-center gap-1 px-1.5 py-1 rounded"
+                title="Clear tabs"
+                aria-label="Clear tabs"
+              >
+                <ArrowDown size={12} />
+                <span>Clear</span>
+              </button>
+            )}
+          >
+            {showDropIndicator && (
+              <div className="absolute left-0 right-0 top-0 h-0.5 bg-blue-500 z-20" />
+            )}
+            {showDropInto && (
+              <div className="absolute inset-0 rounded-md ring-2 ring-blue-500 pointer-events-none" />
+            )}
+          </TreeRow>
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content>{menuContent}</ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
     );
   }
 );
@@ -789,14 +835,17 @@ interface TabListProps {
   onSpaceDropTargetChange?: (spaceId: string | null) => void;
   onPerformAction?: (action: UndoableAction) => Promise<void>;
   onBookmarkCreated?: (bookmark: chrome.bookmarks.BookmarkTreeNode, tabId?: number) => void;
+  pinnedSiteUrls?: readonly string[];
 }
 
-export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFirst', onTabGroupDisplayOrderChange, onExternalDropTargetChange: _onExternalDropTargetChange, resolveBookmarkDropTarget: _resolveBookmarkDropTarget, arcStyleEnabled = false, filterText = '', activeSpace: activeSpaceProp, useSpaces = true, onSpaceDropTargetChange: _onSpaceDropTargetChange, onPerformAction, onBookmarkCreated }: TabListProps) =>
+export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFirst', onTabGroupDisplayOrderChange, onExternalDropTargetChange: _onExternalDropTargetChange, resolveBookmarkDropTarget: _resolveBookmarkDropTarget, arcStyleEnabled = false, filterText = '', activeSpace: activeSpaceProp, useSpaces = true, onSpaceDropTargetChange: _onSpaceDropTargetChange, onPerformAction, onBookmarkCreated, pinnedSiteUrls = [] }: TabListProps) =>
 {
   const { spaces, activeSpace: activeSpaceFromContext, windowId } = useSpacesContext();
   const { tabs, closeTabs, activateTab, moveTab, groupTab, ungroupTab, createGroupWithTab, createTabInGroup, createTab, duplicateTab, sortTabs, sortGroupTabs, error } = useTabs(windowId ?? undefined);
   const { tabGroups, updateGroup, moveGroup } = useTabGroups();
+  const tabSpaceAssignments = useTabSpaceAssignments(windowId);
   const { getManagedTabIds, associateExistingTab, getItemKeyForTab, restoreItemAssociation, deassociateBookmarkTab, getTabIdForBookmark, deassociatePinnedTab, getTabIdForPinned } = useBookmarkTabsContext();
+  const { bookmarks, findFolderInParent, findFolderBySegments, createFolder, createBookmark, createBookmarksBatch, getChildren, clearFolder, getBookmarkSegments } = useBookmarks();
 
   // Use prop if provided, otherwise use context
   const activeSpace = activeSpaceProp ?? activeSpaceFromContext;
@@ -804,27 +853,33 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
   // Check if we're in a non-"all" space
   const isInSpace = activeSpace && activeSpace.id !== 'all';
 
-  // Filter out tabs managed by bookmark-tab associations (Arc-style persistent tabs)
-  // Also apply text filter and space filter (using Chrome tab groups)
+  const persistentItemUrls = useMemo(() =>
+  {
+    const urls = new Set(pinnedSiteUrls);
+
+    const collectBookmarkUrls = (nodes: readonly chrome.bookmarks.BookmarkTreeNode[]): void =>
+    {
+      // 普通 Tabs 的定义覆盖全部书签，所以需要遍历整棵树，而不只看当前 Space 展开的节点。
+      for (const node of nodes)
+      {
+        if (node.url) urls.add(node.url);
+        if (node.children) collectBookmarkUrls(node.children);
+      }
+    };
+
+    collectBookmarkUrls(bookmarks);
+    return urls;
+  }, [bookmarks, pinnedSiteUrls]);
+
+  // 固定项先排除，普通 Tab 再按扩展内部 Space 关联过滤。
   const visibleTabs = useMemo(() =>
   {
     const managedTabIds = getManagedTabIds();
-    let filtered = filterUnmanagedTabs(tabs, managedTabIds);
+    let filtered = filterUnmanagedTabs(tabs, managedTabIds, persistentItemUrls);
 
-    // Space filter: when in a space, show tabs in Chrome group matching Space name
     if (isInSpace && activeSpace)
     {
-      // Find Chrome group with matching name
-      const matchingGroup = tabGroups.find(g => g.title === activeSpace.name);
-      if (matchingGroup)
-      {
-        filtered = filtered.filter(tab => tab.groupId === matchingGroup.id);
-      }
-      else
-      {
-        // Space has no group yet - show no tabs
-        filtered = [];
-      }
+      filtered = filterTabsForSpace(filtered, tabSpaceAssignments, activeSpace.id);
     }
 
     if (filterText.trim())
@@ -834,11 +889,11 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
       );
     }
     return filtered;
-  }, [tabs, getManagedTabIds, filterText, isInSpace, activeSpace, tabGroups]);
+  }, [tabs, getManagedTabIds, persistentItemUrls, filterText, isInSpace, activeSpace, tabSpaceAssignments]);
 
-  // Get all tab groups in current window
-  // Spaces link to Chrome groups by matching Space.name to group.title
-  const visibleTabGroups = tabGroups;
+  // 用户自己的原生标签组仍可在当前 Space 中展示，但它们不再决定 Space 归属。
+  const visibleGroupIds = new Set(visibleTabs.map(tab => tab.groupId).filter(groupId => groupId !== -1));
+  const visibleTabGroups = tabGroups.filter(group => visibleGroupIds.has(group.id));
 
   // Create new tab - background.ts will auto-add to active space
   const handleNewTab = useCallback(async () =>
@@ -970,8 +1025,7 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
     setToastState({ isVisible: false, message: '' });
   }, []);
 
-  // Core function to move a tab to a space (adds to Chrome group matching Space name)
-  // Special case: "all" space ungroups the tab
+  // Move a tab between extension Spaces without changing its native Chrome group.
   const moveTabToSpace = useCallback(async (tabId: number, spaceId: string) =>
   {
     if (!windowId) return;
@@ -1044,7 +1098,6 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
   }, []);
 
   // Bookmarks functions for export and tab-to-bookmark drops
-  const { findFolderInParent, findFolderBySegments, createFolder, createBookmark, createBookmarksBatch, getChildren, clearFolder, getBookmarkSegments } = useBookmarks();
   const findSpaceForFolder = useFindSpaceForFolder(getBookmarkSegments, spaces);
 
   // Persisted per-space last selected bookmark folder (spaceId → folderId)
@@ -1519,6 +1572,11 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
       ? [...groupItems, ...ungroupedItems]
       : [...ungroupedItems, ...groupItems];
   }, [visibleTabs, visibleTabGroups, tabGroupDisplayOrder]);
+
+  const arcSectionItems = useMemo(
+    () => getArcTabSectionItems(displayItems),
+    [displayItems]
+  );
 
   // Build flat list of visible items for selection range calculation
   const flatVisibleItems = useMemo((): SelectionItem[] =>
@@ -2495,18 +2553,33 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
 
   return (
     <>
-      {/* Tabs Label Row */}
-      <SectionHeader
-        label="Tabs"
-        menuContent={tabsMenuContent}
-        menuTitle="Tab options"
-        className="arc-tabs-title"
-      />
-
       {/* Tabs list */}
       <div ref={tabListContainerRef} data-dnd-zone="tabList">
-          {displayItems.map((item) =>
+          {arcSectionItems.map((sectionItem) =>
           {
+            if (sectionItem.type === 'new-tab')
+            {
+              return (
+                <DroppableNewTabRow
+                  key="new-tab"
+                  ref={endOfListRef}
+                  onClick={handleNewTab}
+                  menuContent={tabsMenuContent}
+                  onClearTabs={visibleTabs.length > 0 ? handleCloseAllTabs : undefined}
+                  showDropIndicator={dropTargetId === 'end-of-list' && dropPosition === 'before' && !isInSpace}
+                  showDropInto={
+                    !!(externalUrlDropTarget?.targetId === 'end-of-list') ||
+                    !!(dropTargetId === 'end-of-list' && dropPosition === 'into' && activeDragData && (
+                      hasFormat(activeDragData, DragFormat.TAB) ||
+                      hasFormat(activeDragData, DragFormat.BOOKMARK) ||
+                      hasFormat(activeDragData, DragFormat.URL)
+                    ))
+                  }
+                />
+              );
+            }
+
+            const item = sectionItem.tab;
             if (item.type === 'tab')
             {
               const tabId = String(item.tab.id);
@@ -2705,21 +2778,6 @@ export const TabList = ({ onPin, onPinMultiple, tabGroupDisplayOrder = 'groupsFi
               );
             }
           })}
-
-          {/* + New Tab Row (also serves as end-of-list drop zone) */}
-          <DroppableNewTabRow
-            ref={endOfListRef}
-            onClick={handleNewTab}
-            showDropIndicator={dropTargetId === 'end-of-list' && dropPosition === 'before' && !isInSpace}
-            showDropInto={
-              !!(externalUrlDropTarget?.targetId === 'end-of-list') ||
-              !!(dropTargetId === 'end-of-list' && dropPosition === 'into' && activeDragData && (
-                hasFormat(activeDragData, DragFormat.TAB) ||
-                hasFormat(activeDragData, DragFormat.BOOKMARK) ||
-                hasFormat(activeDragData, DragFormat.URL)
-              ))
-            }
-          />
 
           {/* Error message */}
           {error && (

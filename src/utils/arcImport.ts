@@ -837,10 +837,7 @@ export async function importArcData(
         const groupColor = arcSpace.hexColor
           ? toChromeColor(arcSpace.hexColor)
           : toChromeColor(SPACE_COLORS[colorIndex % SPACE_COLORS.length]);
-        await chrome.tabGroups.update(groupId, {
-          title: arcSpace.name,
-          color: groupColor,
-        });
+        await chrome.tabGroups.update(groupId, { title: arcSpace.name, color: groupColor });
         result.tabsOpened += createdTabIds.length;
       }
       colorIndex++;

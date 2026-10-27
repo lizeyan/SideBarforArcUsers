@@ -14,6 +14,14 @@ import {
 } from '../utils/tabAssociations';
 import { restoreTabAssociations } from '../utils/restoreTabAssociations';
 import { isActivationForWindow } from '../utils/tabActivationScope';
+import { PINNED_SITES_STORAGE_KEY, PinnedSite } from '../managers/shared/pinnedSitesApi';
+import {
+  findParkedReplacementTab,
+  getEffectiveTabUrl,
+  parseParkedTabUrl,
+  recoverFixedTabAssociations,
+  recoverParkedTabAssociations,
+} from '../utils/parkedTabAssociation';
 
 // Helper to create item keys
 const makeBookmarkKey = (bookmarkId: string) => `bookmark-${bookmarkId}`;
@@ -115,18 +123,71 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     {
       await chrome.runtime.sendMessage({ action: WAIT_FOR_TAB_ASSOCIATIONS_READY });
 
-      // Get stored associations from session storage
-      const associations = await getTabAssociations(windowId);
+      // 一次读取当前窗口全部 Tab，避免固定 Tab 越多，首次打开就产生越多次 chrome.tabs.get。
+      const [associations, allTabs] = await Promise.all([
+        getTabAssociations(windowId),
+        chrome.tabs.query({ windowId }),
+      ]);
+      const tabsById = new Map(
+        allTabs.flatMap(tab => tab.id === undefined ? [] : [[tab.id, tab] as const])
+      );
 
       performance.mark('sidebar:associations-start');
-      const restored = await restoreTabAssociations(associations, (tabId) =>
-        new Promise<chrome.tabs.Tab | null>((resolve) =>
-        {
-          chrome.tabs.get(tabId, (tab) =>
-          {
-            resolve(chrome.runtime.lastError ? null : tab);
-          });
+      const restored = await restoreTabAssociations(
+        associations,
+        async (tabId) => tabsById.get(tabId) ?? null
+      );
+
+      // 外部休眠扩展可能用 park 页面替换原 Tab。先按旧 Tab ID 恢复；只有旧关联已经
+      // 丢失时，才额外读取书签和 Favorites，用 park 页面携带的原始 URL 做一次自愈。
+      let recovered = recoverParkedTabAssociations(allTabs, associations);
+      let persistentItemsLoaded = false;
+      const hasUnresolvedParkedTab = allTabs.some(tab =>
+        tab.id !== undefined
+        && parseParkedTabUrl(tab.url) !== null
+        && !restored.associations[tab.id]
+        && !recovered[tab.id]
+      );
+      if (hasUnresolvedParkedTab)
+      {
+        const [bookmarkRoots, pinnedResult] = await Promise.all([
+          chrome.bookmarks.getTree(),
+          chrome.storage.local.get([PINNED_SITES_STORAGE_KEY]),
+        ]);
+        persistentItemsLoaded = true;
+        const pinnedSites = (pinnedResult[PINNED_SITES_STORAGE_KEY] as PinnedSite[] | undefined) ?? [];
+        recovered = {
+          ...recovered,
+          ...recoverFixedTabAssociations(
+            allTabs,
+            { ...associations, ...recovered },
+            bookmarkRoots,
+            pinnedSites
+          ),
+        };
+      }
+
+      const recoveredBackups: Promise<void>[] = [];
+      // 把恢复出的 park 页面补进所有派生索引，并立即持久化，确保再次关闭侧边栏后仍稳定。
+      for (const [tabIdText, itemKey] of Object.entries(recovered))
+      {
+        const tabId = Number(tabIdText);
+        const tab = tabsById.get(tabId);
+        if (!tab) continue;
+
+        restored.associations[tabId] = itemKey;
+        restored.itemToTab.set(itemKey, tabId);
+        restored.tabToItem.set(tabId, itemKey);
+        if (tab.title) restored.tabTitles.set(tabId, tab.title);
+        if (tab.audible) restored.audibleTabs.add(tabId);
+        if (tab.mutedInfo?.muted) restored.mutedTabs.add(tabId);
+        recoveredBackups.push(saveTabAssociationBackup(windowId, itemKey, {
+          tabId,
+          url: getEffectiveTabUrl(tab.url),
+          tabIndex: tab.index,
         }));
+      }
+      await Promise.all(recoveredBackups);
       performance.mark('sidebar:associations-ready');
       performance.measure('sidebar:associations-restore', 'sidebar:associations-start', 'sidebar:associations-ready');
 
@@ -142,6 +203,38 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
       setAudibleTabs(restored.audibleTabs);
       setMutedTabs(restored.mutedTabs);
       setIsInitialized(true);
+
+      if (!persistentItemsLoaded)
+      {
+        // 普通 URL 匹配放在首屏状态提交之后执行，固定身份会很快补齐，但不会重新引入首次空白等待。
+        void Promise.all([
+          chrome.bookmarks.getTree(),
+          chrome.storage.local.get([PINNED_SITES_STORAGE_KEY]),
+        ]).then(async ([bookmarkRoots, pinnedResult]) =>
+        {
+          const latestAssociations = await getTabAssociations(windowId);
+          const pinnedSites = (pinnedResult[PINNED_SITES_STORAGE_KEY] as PinnedSite[] | undefined) ?? [];
+          const fixedAssociations = recoverFixedTabAssociations(
+            allTabs,
+            latestAssociations,
+            bookmarkRoots,
+            pinnedSites
+          );
+          if (Object.keys(fixedAssociations).length === 0) return;
+
+          await setTabAssociations(windowId, { ...latestAssociations, ...fixedAssociations });
+          await Promise.all(Object.entries(fixedAssociations).map(([tabIdText, itemKey]) =>
+          {
+            const tab = tabsById.get(Number(tabIdText));
+            if (!tab) return Promise.resolve();
+            return saveTabAssociationBackup(windowId, itemKey, {
+              tabId: Number(tabIdText),
+              url: getEffectiveTabUrl(tab.url),
+              tabIndex: tab.index,
+            });
+          }));
+        }).catch(err => console.error('Failed to recover fixed tab associations:', err));
+      }
     }
     catch (err)
     {
@@ -221,9 +314,32 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   {
     if (currentWindowId === null) return;
 
-    const handleTabRemoved = (tabId: number) =>
+    const handleTabRemoved = async (tabId: number, removeInfo: chrome.tabs.TabRemoveInfo) =>
     {
-      void removeLocalTabAssociation(tabId, currentWindowId);
+      if (removeInfo.windowId !== currentWindowId) return;
+
+      // 休眠扩展先创建 park 页面再关闭原 Tab；此时迁移身份，不能按普通关闭清掉备份。
+      const currentTabs = await chrome.tabs.query({ windowId: currentWindowId });
+      const replacement = findParkedReplacementTab(currentTabs, tabId);
+      const replacementId = replacement?.id;
+      if (replacement && replacementId !== undefined)
+      {
+        const associations = await getTabAssociations(currentWindowId);
+        const itemKey = associations[tabId] ?? tabToItem.get(tabId);
+        if (itemKey)
+        {
+          await storeTabAssociation(currentWindowId, replacementId, itemKey);
+          await removeStoredAssociation(currentWindowId, tabId);
+          await saveTabAssociationBackup(currentWindowId, itemKey, {
+            tabId: replacementId,
+            url: getEffectiveTabUrl(replacement.url),
+            tabIndex: replacement.index,
+          });
+          return;
+        }
+      }
+
+      await removeLocalTabAssociation(tabId, currentWindowId);
     };
 
     chrome.tabs?.onRemoved?.addListener(handleTabRemoved);
@@ -232,7 +348,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     {
       chrome.tabs?.onRemoved?.removeListener(handleTabRemoved);
     };
-  }, [currentWindowId, removeLocalTabAssociation]);
+  }, [currentWindowId, removeLocalTabAssociation, tabToItem]);
 
   // Listen for tab detached (moved to another window)
   // When a tab is detached from this window, treat it as closed in this window
@@ -454,21 +570,10 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
           return newMap;
         });
 
-        // 书签和 Favorite 固定 Tab 都登记其原生 Chrome 组归属。
+        // 书签和 Favorite 固定 Tab 都登记内部 Space 归属。
         if (spaceId && windowId)
         {
           await tabSpaceRegistryProxy.register(windowId, tabId, spaceId);
-        }
-
-        // 已知固定项归属时显式传递目标 Space，避免快速切换 Space 造成分组竞态。
-        if (windowId)
-        {
-          chrome.runtime.sendMessage({
-            action: 'queue-tab-for-grouping',
-            tabId,
-            windowId,
-            spaceId,
-          });
         }
 
         resolve(tabId);
@@ -595,13 +700,6 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
     if (spaceId && currentWindowId !== null)
     {
       await tabSpaceRegistryProxy.register(currentWindowId, tabId, spaceId);
-
-      chrome.runtime.sendMessage({
-        action: 'queue-tab-for-grouping',
-        tabId,
-        windowId: currentWindowId,
-        spaceId
-      });
     }
 
     setItemToTab((prev) =>
@@ -687,7 +785,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   }, [itemToTab, tabTitles]);
 
   // Deassociate a pinned site from its tab (tab stays alive, becomes unmanaged).
-  // 先移除关联再重新排入当前 Space，background 才会把它按普通 Tab 处理。
+  // 先移除固定项关联，再让 background 把它登记为当前 Space 的普通 Tab。
   const deassociatePinnedTab = useCallback(async (pinnedId: string): Promise<void> =>
   {
     if (currentWindowId === null) return;

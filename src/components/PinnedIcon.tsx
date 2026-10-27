@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useState, useRef, useCallback } from 'react';
-import { Globe, Pencil, Trash, X, RotateCcw, Play, Copy, ExternalLink, Link, ArrowRightFromLine, Sparkles } from 'lucide-react';
+import { Globe, Pencil, Trash, X, RotateCcw, Copy, ExternalLink, Link, ArrowRightFromLine, Sparkles } from 'lucide-react';
 import { Dialog } from './Dialog';
 import { PinnedSite, getFaviconUrl, fetchFaviconAsBase64 } from '../hooks/usePinnedSites';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
@@ -283,11 +283,11 @@ export const PinnedIcon = ({
             title={site.title}
             data-dnd-id={pinId}
             data-active={isActive || undefined}
+            data-loaded={isLoaded || undefined}
+            data-audible={isAudible || undefined}
             className={clsx(
               "arc-pinned-site group/pin relative flex items-center justify-center rounded",
-              isDragging ? "cursor-grabbing opacity-50" : "cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700",
-              // Active state: ring only (dot indicator added separately below)
-              isActive && !isDragging && "ring-2 ring-cyan-500 dark:ring-cyan-400"
+              isDragging ? "cursor-grabbing opacity-50" : "cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700"
             )}
             onClick={handleClick}
           >
@@ -303,30 +303,6 @@ export const PinnedIcon = ({
               <div className="absolute -right-1 top-0 bottom-0 w-0.5 bg-blue-500 rounded-full" />
             )}
 
-            {/* Loaded state indicator - bottom-right corner */}
-            {/* Play triangle when audible, dot otherwise */}
-            {isLoaded && !isDragging && (
-              isAudible ? (
-                <Play
-                  size={14}
-                  className={clsx(
-                    "absolute bottom-0 right-0 fill-current",
-                    isActive
-                      ? "text-cyan-400 dark:text-cyan-300"
-                      : "text-cyan-500 dark:text-cyan-400"
-                  )}
-                />
-              ) : (
-                <span
-                  className={clsx(
-                    "absolute bottom-0 right-0 w-2 h-2 rounded-full",
-                    isActive
-                      ? "bg-cyan-400 dark:bg-cyan-300"
-                      : "bg-cyan-500 dark:bg-cyan-400"
-                  )}
-                />
-              )
-            )}
           </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
