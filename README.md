@@ -1,21 +1,43 @@
-# Side Bar for Arc Users — Arc Style
+<h1 align="center">Arc's active development has stopped.<br>Your Arc workflow doesn't have to.</h1>
 
-[![Version](https://img.shields.io/github/package-json/v/lizeyan/SideBarforArcUsers?filename=package.json&label=version&color=4f46e5)](package.json)
-[![Chrome Extension](https://img.shields.io/badge/Chrome-Manifest_V3-4285F4?logo=googlechrome&logoColor=white)](public/manifest.json)
-[![Build](https://github.com/lizeyan/SideBarforArcUsers/actions/workflows/build-release.yml/badge.svg?branch=main)](https://github.com/lizeyan/SideBarforArcUsers/actions/workflows/build-release.yml)
-[![Latest Release](https://img.shields.io/github/v/release/lizeyan/SideBarforArcUsers?display_name=tag&sort=semver)](https://github.com/lizeyan/SideBarforArcUsers/releases/latest)
-[![Release Downloads](https://img.shields.io/github/downloads/lizeyan/SideBarforArcUsers/total)](https://github.com/lizeyan/SideBarforArcUsers/releases)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827)](https://react.dev/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-22c55e.svg)](LICENSE)
+<p align="center"><strong>Arc 的积极开发已经停止，但你已经习惯的 Arc 工作流不必跟着消失。</strong></p>
 
-An independently maintained Chrome extension with one primary goal: make tab management in Chrome feel as close to Arc as the Chrome extension platform allows.
+<p align="center">
+  <strong>Side Bar for Arc Users — Arc Style</strong><br>
+  The Chrome extension built to preserve as much of Arc's tab experience as Chrome allows — in both behavior and appearance.<br>
+  在 Chrome 能力允许的范围内，尽可能同时还原 Arc 的功能、交互与视觉。
+</p>
 
-这是一个独立维护的 Chrome 扩展，核心目标只有一个：在 Chrome 扩展平台允许的范围内，让标签页管理体验尽可能接近 Arc。
+<p align="center">
+  <a href="https://github.com/lizeyan/SideBarforArcUsers/releases/latest"><strong>Download the latest release / 下载最新版</strong></a>
+  ·
+  <a href="#install-from-github-releases--从-github-release-安装">Installation / 安装说明</a>
+  ·
+  <a href="#differences-from-upstream--与上游的差异">Why this fork / 为什么选这个分支</a>
+</p>
 
-Arc is the product and interaction reference for this fork. The extension-owned Side Panel is evaluated against Arc for visual density, Favorites, pinned pages, Spaces, active-tab treatment, menus, persistence, and interaction behavior. Chrome still owns the browser frame, address bar, horizontal tab strip, and Side Panel host header, so those surfaces cannot be replaced or restyled by an extension.
+<p align="center">
+  <a href="package.json"><img alt="Version" src="https://img.shields.io/github/package-json/v/lizeyan/SideBarforArcUsers?filename=package.json&amp;label=version&amp;color=4f46e5"></a>
+  <a href="public/manifest.json"><img alt="Chrome Extension" src="https://img.shields.io/badge/Chrome-Manifest_V3-4285F4?logo=googlechrome&amp;logoColor=white"></a>
+  <a href="https://github.com/lizeyan/SideBarforArcUsers/actions/workflows/build-release.yml"><img alt="Build" src="https://github.com/lizeyan/SideBarforArcUsers/actions/workflows/build-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/lizeyan/SideBarforArcUsers/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/lizeyan/SideBarforArcUsers?display_name=tag&amp;sort=semver"></a>
+  <a href="https://github.com/lizeyan/SideBarforArcUsers/releases"><img alt="Release Downloads" src="https://img.shields.io/github/downloads/lizeyan/SideBarforArcUsers/total"></a>
+  <a href="https://www.typescriptlang.org/"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&amp;logoColor=white"></a>
+  <a href="https://react.dev/"><img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&amp;logoColor=111827"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-22c55e.svg"></a>
+</p>
 
-Arc 是这个分支的产品与交互参考。扩展自己绘制的 Side Panel 会从视觉密度、Favorites、固定页面、Spaces、活跃标签样式、菜单、持久化和交互行为等方面与 Arc 对照。Chrome 顶栏、地址栏、原生横向标签栏和 Side Panel 宿主标题栏由 Chrome 绘制，扩展无法替换或修改这些区域。
+> **Don't settle for another extension that merely moves tabs into a vertical list.** If what you want is the closest Arc-style experience Chrome extensions can provide — Spaces, Favorites, pinned pages, folders, active states, context menus, persistence, and the visual details that make Arc feel like Arc — choose the fork that treats Arc parity as its core product goal, not as a cosmetic theme.
+>
+> **别再将就另一个“只是把标签页竖着放”的替代品。** 如果你想要的是尽可能接近 Arc 的完整标签页体验——包括 Spaces、Favorites、固定页面、文件夹、活跃状态、右键菜单、持久化，以及真正构成 Arc 体验的视觉细节——请选择这个把“与 Arc 保持一致”作为核心产品目标，而不是只套一层 Arc 主题的扩展。
+
+<p align="center">
+  <img src="docs/assets/arc-experience-continues-hero.png" alt="Arc and Side Bar for Arc Users shown side by side" width="1200">
+</p>
+
+Arc is the product and interaction reference for this independently maintained fork. The extension-owned Side Panel is evaluated against Arc for visual density, Favorites, pinned pages, Spaces, active-tab treatment, menus, persistence, and interaction behavior. Chrome still owns the browser frame, address bar, horizontal tab strip, and Side Panel host header, so those surfaces cannot be replaced or restyled by an extension.
+
+Arc 是这个独立维护分支的产品与交互参考。扩展自己绘制的 Side Panel 会从视觉密度、Favorites、固定页面、Spaces、活跃标签样式、菜单、持久化和交互行为等方面持续与 Arc 对照。Chrome 顶栏、地址栏、原生横向标签栏和 Side Panel 宿主标题栏由 Chrome 绘制，扩展无法替换或修改这些区域。
 
 ## Highlights / 核心功能
 
