@@ -21,8 +21,8 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 class NewsVersionChecker
 {
-  static LATEST_VERSION_URL =
-    'https://monemone-org.github.io/ChromeSideBar/public/latest.version';
+  static LATEST_RELEASE_URL =
+    'https://api.github.com/repos/lizeyan/SideBarforArcUsers/releases/latest';
   static STORAGE_KEY_VERSION = 'sidebar-news-latest-version';
   static STORAGE_KEY_CHECK_TIME = 'sidebar-last-news-check-time';
   static CHECK_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
@@ -57,12 +57,12 @@ class NewsVersionChecker
   {
     try
     {
-      const res = await fetch(NewsVersionChecker.LATEST_VERSION_URL);
+      const res = await fetch(NewsVersionChecker.LATEST_RELEASE_URL);
       if (!res.ok) return;
 
-      const text = await res.text();
-      const fetched = parseInt(text.trim(), 10);
-      if (isNaN(fetched)) return;
+      const release = await res.json() as { id?: number };
+      const fetched = release.id;
+      if (typeof fetched !== 'number' || !Number.isSafeInteger(fetched)) return;
 
       this.#cachedVersion = fetched;
 

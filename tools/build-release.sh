@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build and package extension for Chrome Web Store submission
+# Build and package the extension using the same ZIP layout as GitHub Actions.
 #
 # Usage:
 #   ./tools/build-release.sh
@@ -13,12 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "Updating version..."
-
-# Update version number
-# ./tools/update-version.sh
-
-# Re-read version after update
+# Version changes are manual and must happen before this script is run.
 VERSION=$(grep '"version"' public/manifest.json | sed 's/.*: "\([^"]*\)".*/\1/')
 
 echo "Building version ${VERSION}..."
@@ -42,4 +37,4 @@ cd ..
 
 echo ""
 echo "Build complete: $ZIPFILE"
-echo "Ready for Chrome Web Store submission"
+echo "Ready to attach to GitHub Release v${VERSION}"
