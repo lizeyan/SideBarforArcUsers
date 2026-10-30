@@ -129,6 +129,7 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 ### Pinned Sites
 
 - Quick-access icon bar at top of panel
+- Global across Spaces: opening or activating a Favorite never changes the selected Space
 - Pin bookmarks or tabs for one-click navigation
 - Drag-and-drop to reorder
 - Custom icons and colors

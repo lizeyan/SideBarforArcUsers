@@ -2,6 +2,7 @@
 
 ## Latest Version
 
+- Fixed: Global Favorites remain Space-neutral and no longer switch the selected Space when activated
 - Changed: Spaces now use persistent extension-owned Tab assignments instead of creating Chrome native tab groups
 - Fixed: opening Spaces across multiple windows no longer accumulates duplicate Saved Tab Groups
 - New: Arc-style folder collapse states, active descendant peek, New Tab ordering, and one-Space-at-a-time navigation

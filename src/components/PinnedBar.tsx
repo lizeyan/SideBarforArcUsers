@@ -49,7 +49,7 @@ export const PinnedBar = ({
 }: PinnedBarProps) =>
 {
   const { openPinnedTab, closePinnedTab, isPinnedLoaded, isPinnedActive, isPinnedAudible, getTabIdForPinned, deassociatePinnedTab, restoreItemAssociation } = useBookmarkTabsContext();
-  const { windowId, activeSpace } = useSpacesContext();
+  const { windowId } = useSpacesContext();
   const { activeDragData, overId, dropPosition, registerDropHandler, unregisterDropHandler } = useUnifiedDnd();
 
   // Move pinned tab to a new window
@@ -227,7 +227,7 @@ export const PinnedBar = ({
             : undefined}
           onOpen={
             bookmarkOpenMode === 'arc'
-              ? (s) => openPinnedTab(s.id, s.url, activeSpace.id)
+              ? (s) => openPinnedTab(s.id, s.url)
               : bookmarkOpenMode === 'activeTab'
                 ? (s) => chrome.tabs.update({ url: s.url })
                 : (s) => chrome.tabs.create({ url: s.url, active: true, windowId: windowId ?? undefined })

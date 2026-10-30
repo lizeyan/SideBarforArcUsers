@@ -20,9 +20,11 @@ import {
 import {
   assertBookmarkLoaded,
   assertPinnedLoaded,
+  assertSidebarShowsSpace,
   assertTabExists,
   assertTabInOtherWindow,
   assertTabInSpace,
+  assertTabSpaceNeutral,
   assertTabUngrouped,
 } from '../assertions';
 
@@ -157,7 +159,7 @@ export const A3_BOOKMARK_MOVED_SIDEBAR_CLOSED: TestCase = {
 
 export const A4_PINNED_TAB_MOVED: TestCase = {
   id: 'A.4',
-  title: "Pinned tab moved to a different space's group",
+  title: 'Global Favorite remains Space-neutral when opened from another Space',
   setup: async (getCtx) =>
   {
     await createTestSpace(getCtx, { ref: 'spaceA', name: TEST_SPACE_WORK_NAME });
@@ -166,34 +168,16 @@ export const A4_PINNED_TAB_MOVED: TestCase = {
   },
   steps: [
     ...switchSpaceVerified('spaceA'),
-    // Dummy tabs in both groups so the manual step below (moving the pin's
-    // *current* group's sole member into the *other* group) doesn't hit
-    // Chrome's "can't drag the last tab of a group into another group"
-    // restriction - same issue A.3 hit.
-    openRegularTab({ url: testUrl('a4-dummy-work'), spaceRef: 'spaceA', tabRef: 'dummyWork' }),
-    openRegularTab({ url: testUrl('a4-dummy-video'), spaceRef: 'spaceB', tabRef: 'dummyVideo' }),
     openPinnedTab({ pinRef: 'pin', url: testUrl('a4-pin'), tabRef: 'pinTab' }),
     assertPinnedLoaded('pin', true),
-    // Favorite 打开后应立即同步到当前 Space 的 Chrome 原生组。
-    assertTabInSpace('pinTab', 'spaceA'),
-    assertPinnedLoaded('pin', true),
-    assertTabExists('pinTab', true),
+    assertTabSpaceNeutral('pinTab'),
 
-    pause(
-      'Manual step: move the pinned tab natively while the panel is closed',
-      [
-        'Close the sidebar panel (Cmd+Shift+E or the toolbar icon).',
-        `In Chrome's own tab strip, drag the tab for "${testUrl('a4-pin')}" into the "${TEST_SPACE_VIDEO_NAME}" group (there's a dummy tab there already).`,
-        'Reopen the sidebar panel to resume.',
-      ]
-    ),
+    ...switchSpaceVerified('spaceB'),
+    openPinnedTab({ pinRef: 'pin', url: testUrl('a4-pin'), tabRef: 'pinTabAgain' }),
     assertPinnedLoaded('pin', true),
     assertTabExists('pinTab', true),
-    // Without this, the two assertions above would also pass if the manual
-    // drag was skipped entirely - they only re-check state that was already
-    // true before the pause. This is the one assertion that actually
-    // depends on the drag having happened.
-    assertTabInSpace('pinTab', 'spaceB'),
+    assertSidebarShowsSpace('spaceB'),
+    assertTabSpaceNeutral('pinTab'),
   ],
 };
 
@@ -281,42 +265,27 @@ export const A5B_REGULAR_TAB_UNGROUP: TestCase = {
 
 export const A5C_PINNED_TAB_UNGROUP: TestCase = {
   id: 'A.5c',
-  title: 'Pinned tab: native "Remove from group" / ungroup',
+  title: 'Opening a Global Favorite removes a legacy Space assignment',
   setup: async (getCtx) =>
   {
     await createTestSpace(getCtx, { ref: 'spaceA', name: TEST_SPACE_WORK_NAME });
-    await createTestPinnedSite(getCtx, 'A5c open pin', testUrl('a5c-open'), 'pinOpen');
-    await createTestPinnedSite(getCtx, 'A5c closed pin', testUrl('a5c-closed'), 'pinClosed');
+    await createTestSpace(getCtx, { ref: 'spaceB', name: TEST_SPACE_VIDEO_NAME });
+    await createTestPinnedSite(getCtx, 'A5c pin', testUrl('a5c-pin'), 'pin');
   },
   steps: [
     ...switchSpaceVerified('spaceA'),
-    // Keeps the "Work" group non-empty throughout, so it never disappears
-    // and gets silently recreated between the two pinned tabs joining it.
-    openRegularTab({ url: testUrl('a5c-dummy'), spaceRef: 'spaceA', tabRef: 'dummyTab' }),
+    openPinnedTab({ pinRef: 'pin', url: testUrl('a5c-pin'), tabRef: 'pinTab' }),
+    assertTabSpaceNeutral('pinTab'),
 
-    openPinnedTab({ pinRef: 'pinOpen', url: testUrl('a5c-open'), tabRef: 'tabOpen' }),
-    assertPinnedLoaded('pinOpen', true),
-    assertTabInSpace('tabOpen', 'spaceA'),
-    assertPinnedLoaded('pinOpen', true),
-    ungroupTab('tabOpen'),
-    // Favorite 仍然固定，background 应把它恢复到登记的 Space 组。
-    assertTabInSpace('tabOpen', 'spaceA'),
-    assertPinnedLoaded('pinOpen', true),
+    // 模拟旧版本遗留的 Favorite → Space 关联。
+    moveTabSidebar({ tabRef: 'pinTab', targetSpaceRef: 'spaceA' }),
+    assertTabInSpace('pinTab', 'spaceA'),
 
-    openPinnedTab({ pinRef: 'pinClosed', url: testUrl('a5c-closed'), tabRef: 'tabClosed' }),
-    assertTabInSpace('tabClosed', 'spaceA'),
-    pause(
-      'Manual step: ungroup the pinned tab while the panel is closed',
-      [
-        'Close the sidebar panel (Cmd+Shift+E or the toolbar icon).',
-        `In Chrome's own tab strip, right-click the tab for "${testUrl('a5c-closed')}" → Remove from group.`,
-        'If that option is greyed out, dragging the tab out of the group strip has the same effect.',
-        'Reopen the sidebar panel to resume.',
-      ]
-    ),
-    // Side Panel 关闭时 background 仍应把 Favorite 恢复到原 Space 组。
-    assertTabInSpace('tabClosed', 'spaceA'),
-    assertPinnedLoaded('pinClosed', true),
+    ...switchSpaceVerified('spaceB'),
+    openPinnedTab({ pinRef: 'pin', url: testUrl('a5c-pin'), tabRef: 'pinTabAgain' }),
+    assertSidebarShowsSpace('spaceB'),
+    assertTabSpaceNeutral('pinTab'),
+    assertPinnedLoaded('pin', true),
   ],
 };
 

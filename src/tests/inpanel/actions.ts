@@ -466,7 +466,7 @@ export function openPinnedTab(opts: { pinRef: string; url: string; tabRef: strin
     run: async (ctx) =>
     {
       const pinnedId = resolveStringRef(ctx, opts.pinRef);
-      const tabId = await ctx.openPinnedTab(pinnedId, opts.url, ctx.activeSpaceId);
+      const tabId = await ctx.openPinnedTab(pinnedId, opts.url);
       if (tabId === undefined) throw new Error('openPinnedTab did not return a tab id');
       ctx.refs.set(opts.tabRef, tabId);
     },

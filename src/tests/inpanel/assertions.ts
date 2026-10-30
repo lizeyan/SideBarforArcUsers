@@ -33,6 +33,24 @@ export function assertTabInSpace(tabRef: string, spaceRef: string): TestStep
   };
 }
 
+/** 验证 Global Favorite 的真实 Tab 没有任何扩展内部 Space 归属。 */
+export function assertTabSpaceNeutral(tabRef: string): TestStep
+{
+  return {
+    kind: 'assert',
+    label: `Tab "${tabRef}" is not assigned to any Space`,
+    run: async (ctx) =>
+    {
+      const tabId = resolveTabId(ctx, tabRef);
+      const assignments = await tabSpaceRegistryProxy.getWindowAssignments(ctx.windowId);
+      if (assignments[tabId] !== undefined)
+      {
+        throw new Error(`expected no internal Space assignment, got ${assignments[tabId]}`);
+      }
+    },
+  };
+}
+
 /**
  * assertTabInSpace, but polls until `timeoutMs` passes. For tabs grouped by
  * background's grouping queue rather than by the step before, where the

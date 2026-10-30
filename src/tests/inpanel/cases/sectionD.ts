@@ -7,7 +7,7 @@ import { Space } from '../../../contexts/SpacesContext';
 import { TestCase, TestStep } from '../types';
 import { createTestBookmark, createTestPinnedSite, createTestSpace, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
 import { openBookmarkTab, openPinnedTab, openRegularTab, renameSpace, switchSpaceVerified } from '../actions';
-import { assertBookmarkLoaded, assertPinnedLoaded, assertSpaceExists, assertTabExists, assertTabInSpace } from '../assertions';
+import { assertBookmarkLoaded, assertPinnedLoaded, assertSpaceExists, assertTabExists, assertTabInSpace, assertTabSpaceNeutral } from '../assertions';
 import { resolveSpace, resolveStringRef } from '../stepHelpers';
 
 // D.1's doc step 3 (renaming from a second window and checking whether a
@@ -88,8 +88,7 @@ export const D2_DELETE_SPACE_WITH_TRACKED_TABS: TestCase = {
     openRegularTab({ url: testUrl('d2-regular'), spaceRef: 'spaceA', tabRef: 'regularTab' }),
     assertBookmarkLoaded('bm', true),
     assertPinnedLoaded('pin', true),
-    // Favorite 属于当前 Space 的原生组，因此 Space 生命周期也管理其真实 Tab。
-    assertTabInSpace('pinnedTab', 'spaceA'),
+    assertTabSpaceNeutral('pinnedTab'),
 
     doDeleteSpace('spaceA'),
     // Confirmed independently of the tab-survival checks below: the space
@@ -103,8 +102,10 @@ export const D2_DELETE_SPACE_WITH_TRACKED_TABS: TestCase = {
     assertSpaceExists('spaceA', false),
     assertTabExists('bookmarkTab', false),
     assertTabExists('regularTab', false),
-    assertTabExists('pinnedTab', false),
-    assertPinnedLoaded('pin', false),
+    // Global Favorite 不属于被删除的 Space，因此真实 Tab 和固定身份都应保留。
+    assertTabExists('pinnedTab', true),
+    assertPinnedLoaded('pin', true),
+    assertTabSpaceNeutral('pinnedTab'),
 
     undoDeleteSpace(),
     assertSpaceExists('spaceA', true),
