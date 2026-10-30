@@ -13,7 +13,7 @@
 // non-focused sidebar.
 
 import { ManagerId, callManager, Remote } from './messageRouting';
-import { TabHistoryDetails, TabHistoryManagerApi } from '../shared/tabHistoryManagerApi';
+import { RecentTabItem, TabHistoryDetails, TabHistoryManagerApi } from '../shared/tabHistoryManagerApi';
 
 export const tabHistoryManagerProxy: Remote<TabHistoryManagerApi> = {
   /**
@@ -34,5 +34,20 @@ export const tabHistoryManagerProxy: Remote<TabHistoryManagerApi> = {
   async getHistoryDetails(windowId: number): Promise<TabHistoryDetails>
   {
     return await callManager<TabHistoryDetails>(ManagerId.TAB_HISTORY, 'getHistoryDetails', { windowId });
+  },
+
+  async getRecentTabs(windowId: number): Promise<RecentTabItem[]>
+  {
+    return await callManager<RecentTabItem[]>(ManagerId.TAB_HISTORY, 'getRecentTabs', { windowId });
+  },
+
+  async switchToMostRecent(windowId: number): Promise<boolean>
+  {
+    return await callManager<boolean>(ManagerId.TAB_HISTORY, 'switchToMostRecent', { windowId });
+  },
+
+  async activateRecentTab(windowId: number, tabId: number): Promise<boolean>
+  {
+    return await callManager<boolean>(ManagerId.TAB_HISTORY, 'activateRecentTab', { windowId, tabId });
   },
 };

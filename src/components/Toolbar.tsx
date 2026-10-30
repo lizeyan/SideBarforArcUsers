@@ -1,10 +1,12 @@
-import { Settings, Volume2, ChevronDown, X, Save, Clock, Bookmark, Trash2, RotateCcwSquare, RotateCwSquare, HelpCircle, Search } from 'lucide-react';
+import { Settings, Volume2, ChevronDown, X, Save, Clock, Bookmark, Trash2, RotateCcwSquare, RotateCwSquare, HelpCircle, Search, GalleryVerticalEnd } from 'lucide-react';
 import React, { forwardRef, useState, useRef, useEffect, useCallback } from 'react';
 import * as DropdownMenu from './menu/DropdownMenu';
 import { useShowActiveTab } from '../hooks/useFollowActiveTab';
 import { useSpacesContext } from '../contexts/SpacesContext';
 import { tabHistoryManagerProxy } from '../managers/proxies/tabHistoryManagerProxy';
 import { TabHistoryItem } from '../managers/shared/tabHistoryManagerApi';
+import { RecentTabSwitcher } from './RecentTabSwitcher';
+import { RecentTabSwitcherMessageAction, RecentTabSwitcherRuntimeMessage } from '../utils/recentTabSwitcherMessages';
 
 interface ToolbarProps
 {
@@ -98,9 +100,60 @@ export const Toolbar = forwardRef<HTMLButtonElement, ToolbarProps>(({
   const [historyDropdown, setHistoryDropdown] = useState<'prev' | 'next' | null>(null);
   const [historyBefore, setHistoryBefore] = useState<TabHistoryItem[]>([]);
   const [historyAfter, setHistoryAfter] = useState<TabHistoryItem[]>([]);
+  const [recentSwitcherOpen, setRecentSwitcherOpen] = useState(false);
+  const [recentCommandSession, setRecentCommandSession] = useState<{
+    tabIds: number[];
+    selectedTabId: number;
+  } | null>(null);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevButtonRef = useRef<HTMLButtonElement>(null);
   const nextButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() =>
+  {
+    const handleRuntimeMessage = (message: RecentTabSwitcherRuntimeMessage) =>
+    {
+      if (message.windowId !== windowId) return;
+
+      if (message.action === RecentTabSwitcherMessageAction.SHOW_COMMAND_SESSION)
+      {
+        setRecentSwitcherOpen(false);
+        setRecentCommandSession({
+          tabIds: message.tabIds,
+          selectedTabId: message.selectedTabId,
+        });
+      }
+      else if (message.action === RecentTabSwitcherMessageAction.CLOSE_COMMAND_SESSION)
+      {
+        setRecentCommandSession(null);
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+    return () => chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
+  }, [windowId]);
+
+  const closeRecentSwitcher = useCallback(() =>
+  {
+    setRecentSwitcherOpen(false);
+    if (recentCommandSession && windowId !== null)
+    {
+      setRecentCommandSession(null);
+      chrome.runtime.sendMessage({
+        action: RecentTabSwitcherMessageAction.CANCEL_COMMAND_SESSION,
+        windowId,
+      }).catch(() =>
+      {
+        // Service Worker 正在重启时本地关闭仍然应该立即生效。
+      });
+    }
+  }, [recentCommandSession, windowId]);
+
+  const openRecentSwitcher = useCallback(() =>
+  {
+    closeRecentSwitcher();
+    setRecentSwitcherOpen(true);
+  }, [closeRecentSwitcher]);
 
   // Long-press state for the audio button (used when onAudioTabJump is provided)
   const audioHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -580,6 +633,20 @@ export const Toolbar = forwardRef<HTMLButtonElement, ToolbarProps>(({
             </DropdownMenu.Content>
           </DropdownMenu.Root>
 
+          <button
+            type="button"
+            onClick={openRecentSwitcher}
+            disabled={windowId === null}
+            title="Recent tabs"
+            aria-label="Open recent tabs"
+            data-testid="open-recent-tab-switcher"
+            className={`p-1.5 rounded transition-all duration-150 focus:outline-none ${
+              recentSwitcherOpen || recentCommandSession ? activeButtonClass : inactiveButtonClass
+            }`}
+          >
+            <GalleryVerticalEnd size={16} />
+          </button>
+
           {/* Separator */}
           <div className="w-px h-4 bg-gray-300 dark:bg-gray-600 mx-0.5" />
 
@@ -819,6 +886,15 @@ export const Toolbar = forwardRef<HTMLButtonElement, ToolbarProps>(({
           <span className="text-xs text-gray-500 dark:text-gray-400">With open tabs</span>
         </label>
         </>
+      )}
+
+      {(recentSwitcherOpen || recentCommandSession) && windowId !== null && (
+        <RecentTabSwitcher
+          windowId={windowId}
+          onClose={closeRecentSwitcher}
+          snapshotTabIds={recentCommandSession?.tabIds}
+          controlledSelectedTabId={recentCommandSession?.selectedTabId}
+        />
       )}
     </div>
   );

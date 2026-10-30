@@ -402,6 +402,46 @@ export function assertCommandShortcutBound(commandName: string): TestStep
   };
 }
 
+/** 无默认快捷键的命令只验证注册存在，不要求 Chrome 分配按键。 */
+export function assertCommandRegistered(commandName: string): TestStep
+{
+  return {
+    kind: 'assert',
+    label: `Keyboard command "${commandName}" is registered`,
+    run: async () =>
+    {
+      const commands = await chrome.commands.getAll();
+      const command = commands.find(candidate => candidate.name === commandName);
+      if (!command) throw new Error(`command "${commandName}" is not registered`);
+    },
+  };
+}
+
+/** 验证最近 Tab 窗口只作为 fixed Overlay 出现，不参与 Side Panel 高度布局。 */
+export function assertRecentTabSwitcherVisible(expected: boolean): TestStep
+{
+  return {
+    kind: 'assert',
+    label: `Recent-tab switcher is ${expected ? 'visible as an overlay' : 'closed'}`,
+    run: async () =>
+    {
+      const backdrop = document.querySelector<HTMLElement>('[data-testid="recent-tab-switcher-backdrop"]');
+      if (!expected)
+      {
+        if (backdrop) throw new Error('recent-tab switcher is still visible');
+        return;
+      }
+
+      if (!backdrop) throw new Error('recent-tab switcher did not open');
+      const position = window.getComputedStyle(backdrop).position;
+      if (position !== 'fixed')
+      {
+        throw new Error(`recent-tab switcher must not occupy layout height; expected position=fixed, got ${position}`);
+      }
+    },
+  };
+}
+
 /** Confirms a tab has actually left the test window (e.g. after moveTabToNewWindow) - used for regular tabs, which have no bookmark/pinned association to check instead. */
 export function assertTabInOtherWindow(tabRef: string): TestStep
 {
