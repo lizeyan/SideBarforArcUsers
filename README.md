@@ -241,6 +241,7 @@ Organize your browsing by context with Arc-style Spaces—isolated workspaces th
 
 Toolbar at the top with filter options:
 
+- **Copy URL**: Copy the current Chrome Tab's full URL without opening a menu
 - **Text search bar**: Search by title or URL across pinned sites, bookmarks, and tabs
   - Dropdown shows saved and recent filters (last 5 used)
   - Save button to persist current filter
