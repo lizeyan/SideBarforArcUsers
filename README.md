@@ -129,6 +129,7 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 ### Pinned Sites
 
 - Quick-access icon bar at top of panel
+- Global across Spaces: opening or activating a Favorite never changes the selected Space
 - Pin bookmarks or tabs for one-click navigation
 - Drag-and-drop to reorder
 - Custom icons and colors
@@ -240,6 +241,7 @@ Organize your browsing by context with Arc-style Spaces—isolated workspaces th
 
 Toolbar at the top with filter options:
 
+- **Copy URL**: Copy the current Chrome Tab's full URL without opening a menu
 - **Text search bar**: Search by title or URL across pinned sites, bookmarks, and tabs
   - Dropdown shows saved and recent filters (last 5 used)
   - Save button to persist current filter

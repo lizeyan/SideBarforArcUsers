@@ -15,6 +15,7 @@ import { findParkedReplacementTab, getEffectiveTabUrl, parseParkedTabUrl } from 
 import { RecentTabCommandSession } from './utils/recentTabCommandSession';
 import { RecentTabSwitcherMessageAction } from './utils/recentTabSwitcherMessages';
 import { WindowTaskQueue } from './utils/windowTaskQueue';
+import { isGlobalFavoriteTab, resolveTabSpaceAssignment } from './utils/globalFavoriteTabs';
 
 // Set side panel to open when clicking the extension toolbar button
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -96,6 +97,43 @@ async function getSpaceForTab(windowId: number, tabId: number): Promise<string |
 }
 
 /**
+ * 统一协调一个真实 Tab 的 Space 归属。
+ *
+ * Global Favorite 以固定项关联或 URL 识别，永远保持无 Space 归属；普通 Tab
+ * 则保留已有归属，只有未登记时才使用调用方提供的当前 Space。
+ */
+async function reconcileTabSpaceAssignment(
+  tab: chrome.tabs.Tab,
+  fallbackSpaceId?: string | null
+): Promise<string | undefined>
+{
+  if (tab.id === undefined || tab.windowId === undefined) return undefined;
+
+  const associations = await getTabAssociations(tab.windowId);
+  const assignedSpaceId = tabSpaceRegistry.getSpace(tab.windowId, tab.id);
+  const decision = resolveTabSpaceAssignment({
+    isGlobalFavorite: isGlobalFavoriteTab({
+      itemKey: associations[tab.id],
+      tabUrl: tab.pendingUrl ?? tab.url,
+      favoriteUrls: pinnedSitesManager.getPinnedSites().map(site => site.url),
+    }),
+    assignedSpaceId,
+    fallbackSpaceId,
+  });
+
+  if (decision.shouldUnregister)
+  {
+    await tabSpaceRegistry.unregister(tab.windowId, tab.id);
+  }
+  else if (decision.spaceId && decision.spaceId !== assignedSpaceId)
+  {
+    await tabSpaceRegistry.register(tab.windowId, tab.id, decision.spaceId);
+  }
+
+  return decision.spaceId;
+}
+
+/**
  * Activates a tab and switches the sidebar to its space.
  *
  * Used by explicit user actions (audio quick-jump, audio tabs list, the
@@ -125,21 +163,16 @@ async function setActiveTabAndSpace(
       return { success: false, error: 'Tab has no window' };
     }
 
-    // 显式跳转始终跟随目标 Tab 的真实 Space。
+    // 显式跳转跟随普通 Tab 的真实 Space；Global Favorite 保持当前 Space。
     const persistedSpaceId = spaceStateManager.getActiveSpace(tab.windowId);
     const currentSpaceId = resolveActiveSpaceId(spaceManager.getSpaces(), persistedSpaceId);
-    let destinationSpaceId = await getSpaceForTab(tab.windowId, tabId);
 
     if (currentSpaceId && currentSpaceId !== persistedSpaceId)
     {
       spaceStateManager.setActiveSpace(tab.windowId, currentSpaceId);
     }
 
-    if (!destinationSpaceId && currentSpaceId)
-    {
-      await tabSpaceRegistry.register(tab.windowId, tabId, currentSpaceId);
-      destinationSpaceId = currentSpaceId;
-    }
+    const destinationSpaceId = await reconcileTabSpaceAssignment(tab, currentSpaceId);
 
     let spaceSwitched = false;
     if (destinationSpaceId && persistedSpaceId !== destinationSpaceId)
@@ -240,17 +273,13 @@ async function assignUntrackedTabsToSpaces(): Promise<void>
   for (const tab of tabs)
   {
     if (tab.id === undefined || tab.windowId === undefined) continue;
-    if (tabSpaceRegistry.getSpace(tab.windowId, tab.id)) continue;
 
     const activeSpaceId = resolveActiveSpaceId(
       spaces,
       spaceStateManager.getActiveSpace(tab.windowId)
     );
     const migratedSpaceId = groupSpaceIds.get(tab.groupId) ?? activeSpaceId;
-    if (migratedSpaceId)
-    {
-      await tabSpaceRegistry.register(tab.windowId, tab.id, migratedSpaceId);
-    }
+    await reconcileTabSpaceAssignment(tab, migratedSpaceId);
   }
 }
 
@@ -454,18 +483,15 @@ chrome.tabs.onActivated.addListener(async (activeInfo) =>
     spaceStateManager.setActiveSpace(activeInfo.windowId, currentSpaceId);
   }
 
-  // Lookup destination space for sidebar switch
-  let destinationSpaceId = await getSpaceForTab(activeInfo.windowId, activeInfo.tabId);
-
-  if (!destinationSpaceId && currentSpaceId)
+  let activeTab: chrome.tabs.Tab;
+  try
   {
-    try
-    {
-      await tabSpaceRegistry.register(activeInfo.windowId, activeInfo.tabId, currentSpaceId);
-      destinationSpaceId = currentSpaceId;
-    }
-    catch { /* Tab may no longer exist */ }
+    activeTab = await chrome.tabs.get(activeInfo.tabId);
   }
+  catch { return; }
+
+  // Global Favorite 不属于任何 Space；普通 Tab 才在首次激活时登记当前 Space。
+  const destinationSpaceId = await reconcileTabSpaceAssignment(activeTab, currentSpaceId);
 
   // if (import.meta.env.DEV)
   // {
@@ -633,13 +659,16 @@ chrome.tabs.onDetached.addListener(async (tabId, detachInfo) =>
 chrome.tabs.onAttached.addListener(async (tabId, attachInfo) =>
 {
   await stateReady;
-  const spaceId = detachedTabSpaces.get(tabId)
+  const fallbackSpaceId = detachedTabSpaces.get(tabId)
     ?? resolveActiveSpaceId(spaceManager.getSpaces(), spaceStateManager.getActiveSpace(attachInfo.newWindowId));
   detachedTabSpaces.delete(tabId);
-  if (spaceId)
+
+  try
   {
-    await tabSpaceRegistry.register(attachInfo.newWindowId, tabId, spaceId);
+    const tab = await chrome.tabs.get(tabId);
+    await reconcileTabSpaceAssignment(tab, fallbackSpaceId);
   }
+  catch { /* Tab may have been closed while moving between windows. */ }
 });
 
 // Favicon loading Scenario 5 — see docs/favicon-loading-strategy.md
@@ -683,11 +712,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) =>
     }
     catch { /* tab may have been closed */ }
 
-    const spaceId = tabSpaceRegistry.getSpace(tab.windowId, tabId);
-    if (spaceId)
-    {
-      await tabSpaceRegistry.register(tab.windowId, tabId, spaceId);
-    }
+    const currentSpaceId = resolveActiveSpaceId(
+      spaceManager.getSpaces(),
+      spaceStateManager.getActiveSpace(tab.windowId)
+    );
+    await reconcileTabSpaceAssignment(tab, currentSpaceId);
   }
 
   // Scenario 5: update pinned site favicon when Chrome reports a new favIconUrl
@@ -737,7 +766,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) =>
   }
 });
 
-// 新 Tab 直接登记到当前 Space；Chrome 原生 groupId 不参与 Space 生命周期。
+// 普通新 Tab 登记到当前 Space；Global Favorite 始终保持无 Space 归属。
 chrome.tabs.onCreated.addListener(async (tab) =>
 {
   if (!tab.id || !tab.windowId) return;
@@ -746,10 +775,7 @@ chrome.tabs.onCreated.addListener(async (tab) =>
     spaceManager.getSpaces(),
     spaceStateManager.getActiveSpace(tab.windowId)
   );
-  if (targetSpaceId)
-  {
-    await tabSpaceRegistry.register(tab.windowId, tab.id, targetSpaceId);
-  }
+  await reconcileTabSpaceAssignment(tab, targetSpaceId);
 });
 
 // =============================================================================

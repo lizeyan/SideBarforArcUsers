@@ -42,7 +42,7 @@ interface BookmarkTabsContextValue
   restoreItemAssociation: (tabId: number, itemKey: string) => Promise<void>;
   deassociateBookmarkTab: (bookmarkId: string) => Promise<void>;
   // Pinned site functions
-  openPinnedTab: (pinnedId: string, url: string, spaceId?: string) => Promise<number | undefined>;
+  openPinnedTab: (pinnedId: string, url: string) => Promise<number | undefined>;
   closePinnedTab: (pinnedId: string) => void;
   isPinnedLoaded: (pinnedId: string) => boolean;
   isPinnedAudible: (pinnedId: string) => boolean;
@@ -570,7 +570,7 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
           return newMap;
         });
 
-        // 书签和 Favorite 固定 Tab 都登记内部 Space 归属。
+        // 只有属于书签树的固定页面登记 Space；Global Favorite 调用时不会传 spaceId。
         if (spaceId && windowId)
         {
           await tabSpaceRegistryProxy.register(windowId, tabId, spaceId);
@@ -750,12 +750,20 @@ export const BookmarkTabsProvider = ({ children }: BookmarkTabsProviderProps) =>
   // --- Pinned site-specific wrappers ---
   const openPinnedTab = useCallback(async (
     pinnedId: string,
-    url: string,
-    spaceId?: string
+    url: string
   ): Promise<number | undefined> =>
   {
-    return openItemTab(makePinnedKey(pinnedId), url, spaceId);
-  }, [openItemTab]);
+    // Favorite 跨所有 Space 共享，因此只保存固定项身份，不传递或登记 Space。
+    const tabId = await openItemTab(makePinnedKey(pinnedId), url);
+
+    // Chrome 的 onCreated 可能早于固定项关联写入；这里幂等清理一次，收口该竞态和旧版遗留归属。
+    if (tabId !== undefined && currentWindowId !== null)
+    {
+      await tabSpaceRegistryProxy.unregister(currentWindowId, tabId);
+    }
+
+    return tabId;
+  }, [openItemTab, currentWindowId]);
 
   const closePinnedTab = useCallback((pinnedId: string): void =>
   {

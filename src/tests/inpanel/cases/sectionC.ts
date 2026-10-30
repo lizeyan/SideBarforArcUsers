@@ -38,7 +38,7 @@ import { FollowActiveTabMode } from '../../../utils/followActiveTab';
 import { TestCase } from '../types';
 import { createTestBookmark, createTestBookmarkInFolder, createTestPinnedSite, createTestSpace, createTestSubfolder, TEST_AUDIO_URL, TEST_SPACE_VIDEO_NAME, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
 import { activateTabNative, audioQuickJump, closeTab, navigateTabHistory, openBookmarkTab, openFillerBookmarksUntilScrollable, openFillerTabsUntilScrollable, openPinnedTab, openRecentTabSwitcher, openRegularTab, pause, pressRecentTabSwitcherKey, scrollRowOutOfView, selectAudioTabFromDropdown, selectTabFromHistoryDropdown, setFollowActiveTabMode, showActiveTab, switchSpaceVerified, switchToMostRecentTab, switchToMostRecentTabTwiceConcurrently } from '../actions';
-import { assertAudioListIncludes, assertBookmarkRowExists, assertCommandRegistered, assertCommandShortcutBound, assertRecentTabSwitcherVisible, assertSidebarShowsSpace, assertTabActive, assertTabAudible, assertTabInSpace, assertTabRowVisible } from '../assertions';
+import { assertAudioListIncludes, assertBookmarkRowExists, assertCommandRegistered, assertCommandShortcutBound, assertRecentTabSwitcherVisible, assertSidebarShowsSpace, assertTabActive, assertTabAudible, assertTabRowVisible, assertTabSpaceNeutral } from '../assertions';
 
 const MODES: FollowActiveTabMode[] = ['off', 'space', 'space-and-scroll'];
 
@@ -298,9 +298,8 @@ function makeC1eCase(mode: FollowActiveTabMode): TestCase
   };
 }
 
-// Favorite 的真实 Tab 现在属于打开时的 Space 原生组；原生激活时应和书签
-// 固定 Tab 一样遵循 Follow Active Tab。PinnedBar 没有可滚动的行目标，
-// 所以这里仍只验证 Space 切换，不验证滚动。
+// Global Favorite 不属于任何 Space；无论 Follow Active Tab 使用哪种模式，
+// 从 Chrome 原生标签栏激活它都必须保持当前 Space。
 function makeC1fCase(mode: FollowActiveTabMode): TestCase
 {
   return {
@@ -316,7 +315,7 @@ function makeC1fCase(mode: FollowActiveTabMode): TestCase
       setFollowActiveTabMode('off'),
       ...switchSpaceVerified('spaceA'),
       openPinnedTab({ pinRef: 'pin', url: testUrl('c1f-pin'), tabRef: 'pinTab' }),
-      assertTabInSpace('pinTab', 'spaceA'),
+      assertTabSpaceNeutral('pinTab'),
       ...switchSpaceVerified('spaceB'),
       openRegularTab({ url: testUrl('c1f-tabB'), spaceRef: 'spaceB', tabRef: 'tabB' }),
       activateTabNative('tabB'),
@@ -325,9 +324,8 @@ function makeC1fCase(mode: FollowActiveTabMode): TestCase
       // The actual step under test: native-activate the pinned tab from Chrome's tab strip.
       setFollowActiveTabMode(mode),
       activateTabNative('pinTab'),
-      ...(mode === 'off'
-        ? [assertSidebarShowsSpace('spaceB')]
-        : [assertSidebarShowsSpace('spaceA')]),
+      assertSidebarShowsSpace('spaceB'),
+      assertTabSpaceNeutral('pinTab'),
     ],
   };
 }

@@ -162,8 +162,9 @@ Array<{
 }>
 ```
 - Owner: `src/hooks/usePinnedSites.ts`
-- Consumers: `src/components/PinnedBar.tsx`
+- Consumers: `src/components/PinnedBar.tsx`, `src/background.ts`
 - Instances: 1 per extension (shared across windows)
+- Space behavior: Global Favorites are Space-neutral. Their live Tabs are excluded from `tabSpaceAssignments`, and activation must not change the selected Space.
 
 ---
 

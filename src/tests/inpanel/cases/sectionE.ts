@@ -6,7 +6,7 @@ import { tabHistoryManagerProxy } from '../../../managers/proxies/tabHistoryMana
 import { resolveTabId } from '../stepHelpers';
 import { createTestBookmark, createTestPinnedSite, createTestSpace, TEST_AUDIO_URL, TEST_SPACE_VIDEO_NAME, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
 import { activateTabNative, closeTesterWindow, navigateTabHistory, openBookmarkTab, openPageForTester, openPinnedTab, openRegularTab, pause, switchSpaceVerified } from '../actions';
-import { assertAudioListIncludes, assertBookmarkLoaded, assertPinnedLoaded, assertTabActive, assertTabAudible, assertTabInSpace, assertTabListRowExists } from '../assertions';
+import { assertAudioListIncludes, assertBookmarkLoaded, assertPinnedLoaded, assertTabActive, assertTabAudible, assertTabInSpace, assertTabListRowExists, assertTabSpaceNeutral } from '../assertions';
 
 // The runner's pause/resume checkpoint (runner.ts) persists to
 // chrome.storage.local rather than .session specifically because of this
@@ -73,7 +73,7 @@ export const E4_SIDEBAR_REOPEN: TestCase = {
     assertBookmarkLoaded('bookmark', true),
     assertPinnedLoaded('favorite', true),
     assertTabInSpace('bookmarkTab', 'spaceA'),
-    assertTabInSpace('favoriteTab', 'spaceA'),
+    assertTabSpaceNeutral('favoriteTab'),
     assertTabListRowExists('bookmarkTab', false),
     assertTabListRowExists('favoriteTab', false),
 
@@ -89,7 +89,7 @@ export const E4_SIDEBAR_REOPEN: TestCase = {
     assertBookmarkLoaded('bookmark', true),
     assertPinnedLoaded('favorite', true),
     assertTabInSpace('bookmarkTab', 'spaceA'),
-    assertTabInSpace('favoriteTab', 'spaceA'),
+    assertTabSpaceNeutral('favoriteTab'),
     assertTabListRowExists('bookmarkTab', false),
     assertTabListRowExists('favoriteTab', false),
   ],

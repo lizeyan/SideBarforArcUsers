@@ -411,12 +411,12 @@ Chrome prefers to keep activation inside the same tab group when closing a tab, 
 
 #### C.1f Activate a pinned-site tab from another space
 
-| Step | Action                                                                                       | Off - expected                     | Space - expected                  | Space-and-scroll - expected       |
-| ---- | ----------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------ | ------------------------------------- |
-| 1    | Switch sidebar to Space A                                                                        | -                                       | -                                      | -                                        |
-| 2    | Click a pinned site to open its tab; it joins Space A's Chrome group                              | -                                       | -                                      | -                                        |
-| 3    | Switch sidebar to Space B and activate a tab in Space B                                                                       | -                                       | -                                      | -                                        |
-| 4    | In Chrome's native tab strip, click the pinned tab to activate it                                | No switch | Switch to Space A | Switch to Space A (no row-scroll target in Favorites) |
+| Step | Action                                                                    | Off - expected | Space - expected | Space-and-scroll - expected |
+| ---- | ------------------------------------------------------------------------- | -------------- | ---------------- | --------------------------- |
+| 1    | Switch sidebar to Space A                                                 | -              | -                | -                           |
+| 2    | Click a Global Favorite to open its Space-neutral tab                      | No assignment  | No assignment    | No assignment               |
+| 3    | Switch sidebar to Space B and activate a regular tab in Space B            | -              | -                | -                           |
+| 4    | In Chrome's native tab strip, click the Global Favorite tab to activate it | Stay on Space B | Stay on Space B  | Stay on Space B             |
 
 ### C.2 Explicit actions bypass the mode (should always scroll/switch regardless of setting)
 

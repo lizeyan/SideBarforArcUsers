@@ -1,4 +1,4 @@
-import { Settings, Volume2, ChevronDown, X, Save, Clock, Bookmark, Trash2, RotateCcwSquare, RotateCwSquare, HelpCircle, Search, GalleryVerticalEnd } from 'lucide-react';
+import { Settings, Volume2, ChevronDown, X, Save, Clock, Bookmark, Trash2, RotateCcwSquare, RotateCwSquare, HelpCircle, Search, GalleryVerticalEnd, Link } from 'lucide-react';
 import React, { forwardRef, useState, useRef, useEffect, useCallback } from 'react';
 import * as DropdownMenu from './menu/DropdownMenu';
 import { useShowActiveTab } from '../hooks/useFollowActiveTab';
@@ -7,6 +7,7 @@ import { tabHistoryManagerProxy } from '../managers/proxies/tabHistoryManagerPro
 import { TabHistoryItem } from '../managers/shared/tabHistoryManagerApi';
 import { RecentTabSwitcher } from './RecentTabSwitcher';
 import { RecentTabSwitcherMessageAction, RecentTabSwitcherRuntimeMessage } from '../utils/recentTabSwitcherMessages';
+import { copyActiveTabUrl } from '../utils/copyActiveTabUrl';
 
 interface ToolbarProps
 {
@@ -89,6 +90,33 @@ export const Toolbar = forwardRef<HTMLButtonElement, ToolbarProps>(({
   // This sidebar's own window. Every tab-history call names it explicitly, so
   // background never has to guess which window the request came from.
   const { windowId } = useSpacesContext();
+
+  /** 复制当前窗口活跃 Tab 的完整 URL，并复用全局 Toast 提供轻量反馈。 */
+  const handleCopyActiveUrl = useCallback(async () =>
+  {
+    if (windowId === null)
+    {
+      onShowToast?.('Unable to copy URL');
+      return;
+    }
+
+    try
+    {
+      await copyActiveTabUrl(windowId, {
+        getActiveTab: async (targetWindowId) =>
+        {
+          const tabs = await chrome.tabs.query({ active: true, windowId: targetWindowId });
+          return tabs[0];
+        },
+        writeText: (text) => navigator.clipboard.writeText(text),
+      });
+      onShowToast?.('URL copied');
+    }
+    catch
+    {
+      onShowToast?.('Unable to copy URL');
+    }
+  }, [windowId, onShowToast]);
 
   // Tab history navigation shortcuts
   const [prevTabShortcut, setPrevTabShortcut] = useState<string>('');
@@ -690,20 +718,33 @@ export const Toolbar = forwardRef<HTMLButtonElement, ToolbarProps>(({
 
         </div>
 
-        {/* Right side - Settings gear button */}
-        <div className="relative">
+        {/* 右侧操作保持 Arc 的紧凑图标布局：复制链接紧邻设置。 */}
+        <div className="flex items-center gap-1">
           <button
-            ref={menuButtonRef}
-            onClick={onMenuToggle}
-            title="Menu"
-            className={`p-1.5 rounded transition-all duration-150 ${inactiveButtonClass}`}
+            type="button"
+            onClick={handleCopyActiveUrl}
+            title="Copy URL"
+            aria-label="Copy URL"
+            data-testid="copy-active-tab-url"
+            className={`p-1.5 rounded transition-all duration-150 focus:outline-none ${inactiveButtonClass}`}
           >
-            <Settings size={16} />
+            <Link size={16} />
           </button>
-          {/* Red dot badge for unread news */}
-          {hasUnreadNews && (
-            <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full pointer-events-none" />
-          )}
+
+          <div className="relative">
+            <button
+              ref={menuButtonRef}
+              onClick={onMenuToggle}
+              title="Menu"
+              className={`p-1.5 rounded transition-all duration-150 ${inactiveButtonClass}`}
+            >
+              <Settings size={16} />
+            </button>
+            {/* Red dot badge for unread news */}
+            {hasUnreadNews && (
+              <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full pointer-events-none" />
+            )}
+          </div>
         </div>
       </div>
 
