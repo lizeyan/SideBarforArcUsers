@@ -116,15 +116,75 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 - The previous live Tab is selected by default. Use `Tab`/`ArrowDown` and `Shift+Tab`/`ArrowUp` to move, `Enter` or click to activate, and `Escape` to cancel.
 - Explicit activation follows the target Tab into its Space even when passive **Follow active tab** behavior is disabled.
 - The `switch-recent-tab` extension command immediately switches to the previous live Tab. Repeating the assigned shortcut within 600ms freezes the original MRU order, opens the Side Panel overlay, and advances through that list; 600ms without another trigger closes the overlay and keeps the selected Tab.
-- The command intentionally has no default shortcut and can be assigned from `chrome://extensions/shortcuts`. Chrome does not expose modifier-key release events to extensions, so the 600ms idle timeout replaces Arc's exact “release Ctrl to confirm” behavior.
-- Chrome does not allow extensions to register or replace native `Ctrl+Tab`; see the platform limitation above.
+- We recommend assigning `Ctrl+Shift+Y` to `switch-recent-tab` from `chrome://extensions/shortcuts`. Chrome does not expose modifier-key release events to extensions, so the 600ms idle timeout replaces Arc's exact “release Ctrl to confirm” behavior.
+- Chrome reserves native `Ctrl+Tab` before extensions receive the key event, so an extension cannot register or replace it directly. On macOS, Karabiner-Elements can translate `Ctrl+Tab` into the recommended `Ctrl+Shift+Y` shortcut while Chrome is in the foreground.
 
 - 工具栏的 **Recent Tabs** 按钮会在 Side Panel 内打开临时 Overlay，不会长期占据垂直空间。
 - 默认选中上一个实时 Tab；使用 `Tab`/`ArrowDown` 与 `Shift+Tab`/`ArrowUp` 移动，按 `Enter` 或点击确认，按 `Escape` 取消。
 - 显式激活会同步切换到目标 Tab 所属的 Space，即使被动的 **Follow active tab** 已关闭。
 - 第一次触发 `switch-recent-tab` 会立即切到上一个实时 Tab；在 600ms 内继续触发同一快捷键，会冻结第一次触发时的 MRU 顺序、打开 Side Panel Overlay，并沿该列表继续选择。最后一次触发后 600ms 无新输入，Overlay 自动关闭并保留当前 Tab。
-- 该命令没有默认快捷键，可在 `chrome://extensions/shortcuts` 中手动分配 Chrome 允许的组合键。Chrome 不向扩展提供修饰键松开事件，因此这里使用 600ms 无输入超时近似 Arc 的“松开 Ctrl 确认”。
-- Chrome 不允许扩展注册或替换原生 `Ctrl+Tab`，具体限制见上文。
+- 推荐在 `chrome://extensions/shortcuts` 中把 `switch-recent-tab` 设置为 `Ctrl+Shift+Y`。Chrome 不向扩展提供修饰键松开事件，因此这里使用 600ms 无输入超时近似 Arc 的“松开 Ctrl 确认”。
+- Chrome 会在扩展收到按键事件之前占用原生 `Ctrl+Tab`，因此扩展无法直接注册或替换它。在 macOS 上，可以用 Karabiner-Elements 在 Chrome 位于前台时，把 `Ctrl+Tab` 转换成推荐的 `Ctrl+Shift+Y`。
+
+#### Use Arc-style `Ctrl+Tab` on macOS / 在 macOS 上使用 Arc 风格的 `Ctrl+Tab`
+
+First, open `chrome://extensions/shortcuts` and assign `Ctrl+Shift+Y` to this extension's **Switch to Most Recent Tab** action. Karabiner-Elements only translates the keystroke; the Chrome extension shortcut must be configured first.
+
+首先打开 `chrome://extensions/shortcuts`，把本扩展的 **Switch to Most Recent Tab** 动作设置为 `Ctrl+Shift+Y`。Karabiner-Elements 只负责转换按键，因此必须先正确配置 Chrome 扩展快捷键。
+
+Then configure [Karabiner-Elements](https://karabiner-elements.pqrs.org/):
+
+1. Open **Complex Modifications**.
+2. Click **Add your own rule**.
+3. Replace the editor contents with the JSON below, then save the rule.
+4. Enable **Chrome Ctrl+Tab to Extension**.
+
+然后配置 [Karabiner-Elements](https://karabiner-elements.pqrs.org/)：
+
+1. 打开 **Complex Modifications**。
+2. 点击 **Add your own rule**。
+3. 用下面的 JSON 替换编辑器中的内容，然后保存规则。
+4. 启用 **Chrome Ctrl+Tab to Extension**。
+
+```json
+{
+  "description": "Chrome Ctrl+Tab to Extension",
+  "manipulators": [
+    {
+      "conditions": [
+        {
+          "bundle_identifiers": [
+            "^com\\.google\\.Chrome$"
+          ],
+          "type": "frontmost_application_if"
+        }
+      ],
+      "from": {
+        "key_code": "tab",
+        "modifiers": {
+          "mandatory": [
+            "control"
+          ]
+        }
+      },
+      "to": [
+        {
+          "key_code": "y",
+          "modifiers": [
+            "control",
+            "shift"
+          ]
+        }
+      ],
+      "type": "basic"
+    }
+  ]
+}
+```
+
+This rule applies only while Google Chrome is the frontmost application. It replaces Chrome's native `Ctrl+Tab` “next tab” behavior with the extension's Arc-style recent-tab switching. Disable the Karabiner rule whenever you want Chrome's native behavior back.
+
+该规则只会在 Google Chrome 位于前台时生效。启用后，Chrome 原生 `Ctrl+Tab` 的“下一个标签页”行为会被替换为本扩展的 Arc 风格最近标签切换；如果想恢复 Chrome 原生行为，关闭这条 Karabiner 规则即可。
 
 ### Pinned Sites
 
