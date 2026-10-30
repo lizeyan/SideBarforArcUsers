@@ -31,6 +31,17 @@ export interface TabHistoryDetails
   currentIndex: number;
 }
 
+/** 最近标签切换窗口展示的一项实时 Chrome Tab。 */
+export interface RecentTabItem
+{
+  tabId: number;
+  spaceId: string;
+  title: string;
+  url: string;
+  favIconUrl: string;
+  active: boolean;
+}
+
 /**
  * The subset of TabHistoryManager the sidebar can call.
  *
@@ -55,4 +66,10 @@ export interface TabHistoryManagerApi
   navigateToIndex(windowId: number, index: number): Promise<void>;
   /** Async because it reads each entry's live tab and resolves its Space. */
   getHistoryDetails(windowId: number): Promise<TabHistoryDetails>;
+  /** 返回指定窗口内按最近使用时间排列的实时 Tab。 */
+  getRecentTabs(windowId: number): Promise<RecentTabItem[]>;
+  /** 立即切换到当前 Tab 之外最近使用的 Tab。 */
+  switchToMostRecent(windowId: number): Promise<boolean>;
+  /** 通过统一的 Tab 与 Space 激活链路打开一个候选项。 */
+  activateRecentTab(windowId: number, tabId: number): Promise<boolean>;
 }

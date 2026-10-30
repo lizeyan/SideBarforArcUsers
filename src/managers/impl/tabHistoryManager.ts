@@ -8,7 +8,9 @@
 // directly.
 
 import { ManagerId, RoutedManager } from '../proxies/messageRouting';
-import { TabHistoryDetails, TabHistoryItem, TabHistoryManagerApi } from '../shared/tabHistoryManagerApi';
+import { RecentTabItem, TabHistoryDetails, TabHistoryItem, TabHistoryManagerApi } from '../shared/tabHistoryManagerApi';
+import { RecentTabOrder } from '../../utils/recentTabOrder';
+import { WindowTaskQueue } from '../../utils/windowTaskQueue';
 
 /**
  * The two background.ts functions this manager needs, handed in at
@@ -41,11 +43,14 @@ interface TabHistory
 export class TabHistoryManager implements RoutedManager, TabHistoryManagerApi
 {
   static STORAGE_KEY = 'bg_windowTabHistory';
+  static RECENT_TABS_STORAGE_KEY = 'bg_windowRecentTabs';
   static MAX_SIZE = 25;
 
   readonly managerId = ManagerId.TAB_HISTORY;
 
   #history = new Map<number, TabHistory>();  // windowId -> history
+  #recentTabs = new Map<number, RecentTabOrder>();
+  #recentSwitchQueue = new WindowTaskQueue();
 
   // Navigation state tracking (per-window)
   // - Prevents history tracking when we programmatically activate a tab via navigate()
@@ -82,6 +87,15 @@ export class TabHistoryManager implements RoutedManager, TabHistoryManagerApi
 
       case 'getHistoryDetails':
         return this.getHistoryDetails(message.windowId as number);
+
+      case 'getRecentTabs':
+        return this.getRecentTabs(message.windowId as number);
+
+      case 'switchToMostRecent':
+        return this.switchToMostRecent(message.windowId as number);
+
+      case 'activateRecentTab':
+        return this.activateRecentTab(message.windowId as number, message.tabId as number);
 
       default:
         throw new Error(`${this.managerId}: unknown method "${method}"`);
@@ -140,6 +154,33 @@ export class TabHistoryManager implements RoutedManager, TabHistoryManagerApi
     });
   }
 
+  private saveRecentTabs(): void
+  {
+    chrome.storage.session.set({
+      [TabHistoryManager.RECENT_TABS_STORAGE_KEY]: Array.from(
+        this.#recentTabs.entries(),
+        ([windowId, order]) => [windowId, order.toArray()]
+      )
+    });
+  }
+
+  private getOrCreateRecentTabs(windowId: number): RecentTabOrder
+  {
+    let order = this.#recentTabs.get(windowId);
+    if (!order)
+    {
+      order = new RecentTabOrder([], TabHistoryManager.MAX_SIZE);
+      this.#recentTabs.set(windowId, order);
+    }
+    return order;
+  }
+
+  recordRecent(windowId: number, tabId: number): void
+  {
+    this.getOrCreateRecentTabs(windowId).record(tabId);
+    this.saveRecentTabs();
+  }
+
   push(windowId: number, tabId: number): void
   {
     const history = this.getOrCreateHistory(windowId);
@@ -192,6 +233,13 @@ export class TabHistoryManager implements RoutedManager, TabHistoryManagerApi
   remove(windowId: number, tabId: number): void
   {
     const history = this.#history.get(windowId);
+    const recentTabs = this.#recentTabs.get(windowId);
+    if (recentTabs)
+    {
+      recentTabs.remove(tabId);
+      this.saveRecentTabs();
+    }
+
     if (!history) return;
 
     const idx = history.stack.findIndex(e => e.tabId === tabId);
@@ -331,20 +379,116 @@ export class TabHistoryManager implements RoutedManager, TabHistoryManagerApi
     return { before, after, currentIndex: history.index };
   }
 
+  async getRecentTabs(windowId: number): Promise<RecentTabItem[]>
+  {
+    const liveTabs = await chrome.tabs.query({ windowId });
+    const liveTabsById = new Map(
+      liveTabs.flatMap(tab => tab.id === undefined ? [] : [[tab.id, tab] as const])
+    );
+    const validTabIds = new Set(liveTabsById.keys());
+    const order = this.getOrCreateRecentTabs(windowId);
+    let changed = order.retain(validTabIds);
+
+    const activeTabId = liveTabs.find(tab => tab.active)?.id;
+    if (activeTabId !== undefined && order.toArray()[0] !== activeTabId)
+    {
+      order.record(activeTabId);
+      changed = true;
+    }
+
+    // 没有激活历史的实时 Tab 仍应出现在切换窗口末尾，并保持标签栏顺序。
+    const tabIdsByStripOrder = [...liveTabs]
+      .sort((left, right) => left.index - right.index)
+      .flatMap(tab => tab.id === undefined ? [] : [tab.id]);
+    if (order.appendMissing(tabIdsByStripOrder))
+    {
+      changed = true;
+    }
+
+    if (changed)
+    {
+      this.saveRecentTabs();
+    }
+
+    const items = await Promise.all(order.toArray().map(async tabId =>
+    {
+      const tab = liveTabsById.get(tabId)!;
+      const spaceId = await this.#deps.getSpaceForTab(windowId, tabId) ?? 'all';
+      return {
+        tabId,
+        spaceId,
+        title: tab.title || '(no title)',
+        url: tab.url || tab.pendingUrl || '',
+        favIconUrl: tab.favIconUrl || '',
+        active: tab.active,
+      };
+    }));
+
+    return items;
+  }
+
+  async switchToMostRecent(windowId: number): Promise<boolean>
+  {
+    return this.#recentSwitchQueue.run(windowId, async () =>
+    {
+      // 前一次切换完成后才读取 active 状态，保证快速连续触发形成 A/B 往返。
+      const recentTabs = await this.getRecentTabs(windowId);
+      const target = recentTabs.find(tab => !tab.active);
+      if (!target) return false;
+      return this.activateRecentTab(windowId, target.tabId);
+    });
+  }
+
+  async activateRecentTab(windowId: number, tabId: number): Promise<boolean>
+  {
+    try
+    {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.windowId !== windowId) return false;
+
+      const result = await this.#deps.setActiveTabAndSpace(tabId);
+      if (!result.success) return false;
+
+      // onActivated 也会更新此顺序；move-to-front 是幂等的，可覆盖事件到达时序差异。
+      this.recordRecent(windowId, tabId);
+      return true;
+    }
+    catch
+    {
+      this.remove(windowId, tabId);
+      return false;
+    }
+  }
+
   removeWindow(windowId: number): void
   {
     this.#history.delete(windowId);
+    this.#recentTabs.delete(windowId);
     this.#navigatingWindows.delete(windowId);
+    this.saveRecentTabs();
   }
 
   async load(): Promise<void>
   {
-    const result = await chrome.storage.session.get([TabHistoryManager.STORAGE_KEY]);
+    const result = await chrome.storage.session.get([
+      TabHistoryManager.STORAGE_KEY,
+      TabHistoryManager.RECENT_TABS_STORAGE_KEY,
+    ]);
     if (result[TabHistoryManager.STORAGE_KEY])
     {
       for (const [key, value] of result[TabHistoryManager.STORAGE_KEY])
       {
         this.#history.set(key, value);
+      }
+    }
+
+    const recentTabs = result[TabHistoryManager.RECENT_TABS_STORAGE_KEY];
+    if (recentTabs)
+    {
+      // 每个窗口恢复成独立对象，避免后续移动顺序时共享可变数组。
+      for (const [windowId, tabIds] of recentTabs as Array<[number, number[]]>)
+      {
+        this.#recentTabs.set(windowId, new RecentTabOrder(tabIds, TabHistoryManager.MAX_SIZE));
       }
     }
   }

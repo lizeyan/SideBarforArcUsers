@@ -12,6 +12,9 @@ import { PinnedSitesManager } from './managers/impl/pinnedSitesManager';
 import { TabAssociationReadiness } from './utils/tabAssociationReadiness';
 import { resolveActiveSpaceId } from './utils/spaceSelection';
 import { findParkedReplacementTab, getEffectiveTabUrl, parseParkedTabUrl } from './utils/parkedTabAssociation';
+import { RecentTabCommandSession } from './utils/recentTabCommandSession';
+import { RecentTabSwitcherMessageAction } from './utils/recentTabSwitcherMessages';
+import { WindowTaskQueue } from './utils/windowTaskQueue';
 
 // Set side panel to open when clicking the extension toolbar button
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -300,6 +303,121 @@ const tabAssociationReadiness = new TabAssociationReadiness(
 // 所有事件和消息都等待同一个真实初始化流程，避免 Tab 在归属恢复和旧组迁移中途被处理。
 const stateReady = tabAssociationReadiness.wait();
 
+const RECENT_TAB_COMMAND_SESSION_TIMEOUT_MS = 600;
+
+interface ActiveRecentTabCommandSession
+{
+  session: RecentTabCommandSession;
+  timeoutId: ReturnType<typeof setTimeout>;
+}
+
+const recentTabCommandSessions = new Map<number, ActiveRecentTabCommandSession>();
+const recentTabCommandQueue = new WindowTaskQueue();
+
+/** 通知指定窗口的 Side Panel 显示冻结顺序中的当前选择。 */
+function showRecentTabCommandSession(windowId: number, session: RecentTabCommandSession): void
+{
+  chrome.runtime.sendMessage({
+    action: RecentTabSwitcherMessageAction.SHOW_COMMAND_SESSION,
+    windowId,
+    tabIds: [...session.tabIds],
+    selectedTabId: session.selectedTabId,
+  }).catch(() =>
+  {
+    // Side Panel 可能未打开；快捷键切换本身不依赖 UI。
+  });
+}
+
+/** 清理后台会话，并让仍打开的 Side Panel 移除临时 Overlay。 */
+function closeRecentTabCommandSession(windowId: number): void
+{
+  const activeSession = recentTabCommandSessions.get(windowId);
+  if (activeSession)
+  {
+    clearTimeout(activeSession.timeoutId);
+    recentTabCommandSessions.delete(windowId);
+  }
+
+  chrome.runtime.sendMessage({
+    action: RecentTabSwitcherMessageAction.CLOSE_COMMAND_SESSION,
+    windowId,
+  }).catch(() =>
+  {
+    // Side Panel 可能未打开。
+  });
+}
+
+/** 最后一次快捷键触发后无新输入达到阈值时结束会话。 */
+function scheduleRecentTabCommandSessionClose(windowId: number, session: RecentTabCommandSession): void
+{
+  const previous = recentTabCommandSessions.get(windowId);
+  if (previous)
+  {
+    clearTimeout(previous.timeoutId);
+  }
+
+  const timeoutId = setTimeout(() =>
+  {
+    const current = recentTabCommandSessions.get(windowId);
+    if (current?.session !== session) return;
+    closeRecentTabCommandSession(windowId);
+  }, RECENT_TAB_COMMAND_SESSION_TIMEOUT_MS);
+
+  recentTabCommandSessions.set(windowId, { session, timeoutId });
+}
+
+/**
+ * 处理一次可重复触发的最近 Tab 命令。
+ *
+ * 第一次只执行快速切换；同一会话的第二次及以后沿冻结列表前进并显示
+ * Overlay。命令事件按窗口串行，避免快速按键读取同一份旧 active 状态。
+ */
+async function handleRecentTabCommand(windowId: number, triggeredAt: number): Promise<void>
+{
+  await recentTabCommandQueue.run(windowId, async () =>
+  {
+    const activeSession = recentTabCommandSessions.get(windowId);
+    let session: RecentTabCommandSession | null;
+
+    if (
+      activeSession &&
+      !activeSession.session.isExpired(triggeredAt, RECENT_TAB_COMMAND_SESSION_TIMEOUT_MS)
+    )
+    {
+      clearTimeout(activeSession.timeoutId);
+      session = activeSession.session.advance(triggeredAt);
+    }
+    else
+    {
+      if (activeSession)
+      {
+        closeRecentTabCommandSession(windowId);
+      }
+
+      const recentTabs = await historyManager.getRecentTabs(windowId);
+      session = RecentTabCommandSession.start(
+        recentTabs.map(tab => tab.tabId),
+        triggeredAt
+      );
+    }
+
+    if (!session) return;
+
+    const activated = await historyManager.activateRecentTab(windowId, session.selectedTabId);
+    if (!activated)
+    {
+      closeRecentTabCommandSession(windowId);
+      return;
+    }
+
+    scheduleRecentTabCommandSessionClose(windowId, session);
+    if (session.overlayVisible)
+    {
+      showRecentTabCommandSession(windowId, session);
+    }
+  });
+}
+
 // =============================================================================
 // Event Listeners
 // =============================================================================
@@ -314,6 +432,9 @@ chrome.tabs.onActivated.addListener(async (activeInfo) =>
   await newsVersionChecker.checkIfDue();
 
   const isNavigating = historyManager.isNavigating(activeInfo.windowId);
+
+  // MRU 与后退/前进历史语义不同；所有真实激活都必须移动到最近使用顺序首位。
+  historyManager.recordRecent(activeInfo.windowId, activeInfo.tabId);
 
   // if (import.meta.env.DEV)
   // {
@@ -443,6 +564,7 @@ async function migrateParkedTabAssociation(tab: chrome.tabs.Tab): Promise<boolea
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) =>
 {
   await stateReady;
+  closeRecentTabCommandSession(removeInfo.windowId);
   historyManager.remove(removeInfo.windowId, tabId);
   lastAudibleTracker.clearIfMatches(tabId);
   await tabSpaceRegistry.unregister(removeInfo.windowId, tabId);
@@ -471,6 +593,7 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) =>
 chrome.windows.onRemoved.addListener(async (windowId) =>
 {
   await stateReady;
+  closeRecentTabCommandSession(windowId);
 
   // TODO: remove after testing
   if (import.meta.env.DEV)
@@ -658,6 +781,13 @@ registerManager(pinnedSitesManager);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
 {
+  if (message?.action === RecentTabSwitcherMessageAction.CANCEL_COMMAND_SESSION)
+  {
+    closeRecentTabCommandSession(message.windowId as number);
+    sendResponse({ cancelled: true });
+    return;
+  }
+
   if (message?.action === WAIT_FOR_TAB_ASSOCIATIONS_READY)
   {
     tabAssociationReadiness.wait().then(() => sendResponse({ ready: true }));
@@ -735,7 +865,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
 // Keyboard Shortcuts
 // =============================================================================
 
-chrome.commands.onCommand.addListener((command) =>
+chrome.commands.onCommand.addListener((command, commandTab) =>
 {
   (async () =>
   {
@@ -749,6 +879,18 @@ chrome.commands.onCommand.addListener((command) =>
         const direction = command === "prev-used-tab" ? -1 : 1;
         historyManager.navigate(tabs[0].windowId, direction);
       });
+    }
+
+    if (command === "switch-recent-tab")
+    {
+      // 优先使用 Commands API 提供的触发 Tab，避免多窗口下误取“最近聚焦窗口”。
+      const activeTab = commandTab?.id !== undefined
+        ? commandTab
+        : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+      if (activeTab?.id !== undefined)
+      {
+        await handleRecentTabCommand(activeTab.windowId, Date.now());
+      }
     }
 
     // Open Space Navigator as a focused popup window so it reliably receives keyboard input

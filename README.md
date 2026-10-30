@@ -48,6 +48,7 @@ Arc 是这个独立维护分支的产品与交互参考。扩展自己绘制的 
 - **Arc-like folder and active states / Arc 风格文件夹与活跃状态** — Collapsed folders can expose only their active descendant; active rows, icons, spacing, and menus follow Arc where Chrome APIs allow. / 折叠文件夹可只透出活跃子项，活跃行、图标、间距和菜单在 Chrome API 允许范围内与 Arc 对齐。
 - **Native Chrome groups remain user-owned / 原生标签组保持独立** — Chrome tab groups still work normally, but no longer determine Space membership. / Chrome 原生标签组仍可正常使用，但不再决定标签页属于哪个 Space。
 - **History, search, drag and drop / 历史、搜索与拖拽** — Navigate recently used tabs, filter content, and reorganize pins, bookmarks, tabs, and native groups. / 支持最近使用标签历史、内容筛选，以及 Pins、书签、Tab 和原生标签组的拖拽整理。
+- **Recent-tab switching / 最近标签切换** — Toggle between the two most recently used Tabs, or open a temporary Side Panel switcher that does not occupy layout height. / 支持在最近两个 Tab 间往返，或打开一个不占据布局高度的 Side Panel 临时切换窗口。
 - **Optional AI naming / 可选 AI 命名** — Rename Favorites and pinned pages through a user-configured OpenAI-compatible endpoint. / 可通过用户自行配置的 OpenAI 兼容接口为 Favorites 和固定页面生成名称。
 
 ## Background / 背景
@@ -71,9 +72,9 @@ When a behavior can be implemented safely with Chrome APIs, this fork prefers Ar
 - Collapsed folders can expose the currently active pinned page as a location cue. / 折叠文件夹仍可透出当前活跃的固定页面，保留 Arc 的位置提示。
 - Active rows, spacing, translucency, typography, icons, bottom Space navigation, and context menus are tuned against Arc screenshots. / 活跃行、间距、半透明背景、字体、图标、底部 Space 导航和右键菜单均以 Arc 截图为对照调整。
 
-Platform limitations are documented rather than hidden. Features that require control over Chrome's native window chrome—such as replacing the horizontal tab strip, deleting historical closed Saved Tab Group shortcuts, or styling the Side Panel host header—are outside an extension's control.
+Platform limitations are documented rather than hidden. Features that require control over Chrome's native window chrome—such as replacing the horizontal tab strip, deleting historical closed Saved Tab Group shortcuts, or styling the Side Panel host header—are outside an extension's control. Chrome also reserves `Ctrl+Tab` for its native tab-order navigation and does not let a standard extension intercept or replace it. Reproducing Arc's recent-tab switcher on that exact shortcut would therefore require a system-level helper, which this extension intentionally does not require.
 
-平台限制会被明确说明而不是隐藏。替换 Chrome 横向标签栏、删除已经关闭的历史 Saved Tab Group 快捷项、修改 Side Panel 宿主标题栏等能力不在扩展可控制范围内。
+平台限制会被明确说明而不是隐藏。替换 Chrome 横向标签栏、删除已经关闭的历史 Saved Tab Group 快捷项、修改 Side Panel 宿主标题栏等能力不在扩展可控制范围内。Chrome 还将 `Ctrl+Tab` 保留给原生的标签页顺序切换，标准扩展无法拦截或替换它。因此，如果必须使用完全相同的快捷键复现 Arc 的最近使用标签页切换窗口，就需要额外的系统级组件；本扩展不会把这类组件作为安装前提。
 
 ## Differences from Upstream / 与上游的差异
 
@@ -108,6 +109,22 @@ Navigate back and forward through your recently used tabs—like undo/redo for t
 - `Cmd+Shift+>` (Mac) / `Ctrl+Shift+>` (Windows/Linux): Go forward
 - Each window maintains its own history stack
 - Closed tabs are automatically removed from history
+
+### Recent Tab Switching
+
+- The toolbar's **Recent Tabs** button opens a temporary overlay inside the Side Panel; it does not reserve permanent vertical space.
+- The previous live Tab is selected by default. Use `Tab`/`ArrowDown` and `Shift+Tab`/`ArrowUp` to move, `Enter` or click to activate, and `Escape` to cancel.
+- Explicit activation follows the target Tab into its Space even when passive **Follow active tab** behavior is disabled.
+- The `switch-recent-tab` extension command immediately switches to the previous live Tab. Repeating the assigned shortcut within 600ms freezes the original MRU order, opens the Side Panel overlay, and advances through that list; 600ms without another trigger closes the overlay and keeps the selected Tab.
+- The command intentionally has no default shortcut and can be assigned from `chrome://extensions/shortcuts`. Chrome does not expose modifier-key release events to extensions, so the 600ms idle timeout replaces Arc's exact “release Ctrl to confirm” behavior.
+- Chrome does not allow extensions to register or replace native `Ctrl+Tab`; see the platform limitation above.
+
+- 工具栏的 **Recent Tabs** 按钮会在 Side Panel 内打开临时 Overlay，不会长期占据垂直空间。
+- 默认选中上一个实时 Tab；使用 `Tab`/`ArrowDown` 与 `Shift+Tab`/`ArrowUp` 移动，按 `Enter` 或点击确认，按 `Escape` 取消。
+- 显式激活会同步切换到目标 Tab 所属的 Space，即使被动的 **Follow active tab** 已关闭。
+- 第一次触发 `switch-recent-tab` 会立即切到上一个实时 Tab；在 600ms 内继续触发同一快捷键，会冻结第一次触发时的 MRU 顺序、打开 Side Panel Overlay，并沿该列表继续选择。最后一次触发后 600ms 无新输入，Overlay 自动关闭并保留当前 Tab。
+- 该命令没有默认快捷键，可在 `chrome://extensions/shortcuts` 中手动分配 Chrome 允许的组合键。Chrome 不向扩展提供修饰键松开事件，因此这里使用 600ms 无输入超时近似 Arc 的“松开 Ctrl 确认”。
+- Chrome 不允许扩展注册或替换原生 `Ctrl+Tab`，具体限制见上文。
 
 ### Pinned Sites
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Side Bar for Arc Users — Arc Style",
-  "version": "1.0.351",
+  "version": "1.0.352",
   "description": "Arc-style pinned sites, bookmarks, spaces and active tabs in Chrome's side panel",
   "permissions": [
     "sidePanel",
@@ -56,6 +56,9 @@
         "mac": "Command+Shift+Period"
       },
       "description": "Next Used Tab"
+    },
+    "switch-recent-tab": {
+      "description": "Switch to Most Recent Tab"
     },
     "open-space-navigator": {
       "suggested_key": {

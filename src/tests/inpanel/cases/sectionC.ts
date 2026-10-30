@@ -37,8 +37,8 @@
 import { FollowActiveTabMode } from '../../../utils/followActiveTab';
 import { TestCase } from '../types';
 import { createTestBookmark, createTestBookmarkInFolder, createTestPinnedSite, createTestSpace, createTestSubfolder, TEST_AUDIO_URL, TEST_SPACE_VIDEO_NAME, TEST_SPACE_WORK_NAME, testUrl } from '../fixtures';
-import { activateTabNative, audioQuickJump, closeTab, navigateTabHistory, openBookmarkTab, openFillerBookmarksUntilScrollable, openFillerTabsUntilScrollable, openPinnedTab, openRegularTab, pause, scrollRowOutOfView, selectAudioTabFromDropdown, selectTabFromHistoryDropdown, setFollowActiveTabMode, showActiveTab, switchSpaceVerified } from '../actions';
-import { assertAudioListIncludes, assertBookmarkRowExists, assertCommandShortcutBound, assertSidebarShowsSpace, assertTabActive, assertTabAudible, assertTabInSpace, assertTabRowVisible } from '../assertions';
+import { activateTabNative, audioQuickJump, closeTab, navigateTabHistory, openBookmarkTab, openFillerBookmarksUntilScrollable, openFillerTabsUntilScrollable, openPinnedTab, openRecentTabSwitcher, openRegularTab, pause, pressRecentTabSwitcherKey, scrollRowOutOfView, selectAudioTabFromDropdown, selectTabFromHistoryDropdown, setFollowActiveTabMode, showActiveTab, switchSpaceVerified, switchToMostRecentTab, switchToMostRecentTabTwiceConcurrently } from '../actions';
+import { assertAudioListIncludes, assertBookmarkRowExists, assertCommandRegistered, assertCommandShortcutBound, assertRecentTabSwitcherVisible, assertSidebarShowsSpace, assertTabActive, assertTabAudible, assertTabInSpace, assertTabRowVisible } from '../assertions';
 
 const MODES: FollowActiveTabMode[] = ['off', 'space', 'space-and-scroll'];
 
@@ -1054,6 +1054,106 @@ export const C2G_HISTORY_DROPDOWN_GESTURE: TestCase = {
   ],
 };
 
+// MRU 与旧的后退/前进历史并存；这个用例验证快速触发始终在最近两个 Tab 间往返。
+export const C2H_RECENT_TAB_TOGGLE: TestCase = {
+  id: 'C.2h',
+  title: 'Most-recent Tab toggle across Spaces',
+  setup: async (getCtx) =>
+  {
+    await createTestSpace(getCtx, { ref: 'spaceA', name: TEST_SPACE_WORK_NAME });
+    await createTestSpace(getCtx, { ref: 'spaceB', name: TEST_SPACE_VIDEO_NAME });
+  },
+  steps: [
+    setFollowActiveTabMode('off'),
+    assertCommandRegistered('switch-recent-tab'),
+
+    ...switchSpaceVerified('spaceA'),
+    openRegularTab({ url: testUrl('c2h-tab1'), spaceRef: 'spaceA', tabRef: 'tab1' }),
+    activateTabNative('tab1'),
+
+    ...switchSpaceVerified('spaceB'),
+    openRegularTab({ url: testUrl('c2h-tab2'), spaceRef: 'spaceB', tabRef: 'tab2' }),
+    activateTabNative('tab2'),
+
+    switchToMostRecentTab(),
+    assertTabActive('tab1'),
+    assertSidebarShowsSpace('spaceA'),
+
+    switchToMostRecentTab(),
+    assertTabActive('tab2'),
+    assertSidebarShowsSpace('spaceB'),
+
+    // 两次同时触发应先到 tab1 再回 tab2，而不是两次都停在 tab1。
+    switchToMostRecentTabTwiceConcurrently(),
+    assertTabActive('tab2'),
+    assertSidebarShowsSpace('spaceB'),
+  ],
+};
+
+// Overlay 使用真实工具栏入口和键盘事件，且 fixed 定位不会占据 Side Panel 高度。
+export const C2I_RECENT_TAB_SWITCHER_OVERLAY: TestCase = {
+  id: 'C.2i',
+  title: 'Recent-tab switcher temporary overlay',
+  setup: async (getCtx) =>
+  {
+    await createTestSpace(getCtx, { ref: 'spaceA', name: TEST_SPACE_WORK_NAME });
+  },
+  steps: [
+    setFollowActiveTabMode('off'),
+    ...switchSpaceVerified('spaceA'),
+    openRegularTab({ url: testUrl('c2i-tab1'), spaceRef: 'spaceA', tabRef: 'tab1' }),
+    activateTabNative('tab1'),
+    openRegularTab({ url: testUrl('c2i-tab2'), spaceRef: 'spaceA', tabRef: 'tab2' }),
+    activateTabNative('tab2'),
+
+    openRecentTabSwitcher(),
+    assertRecentTabSwitcherVisible(true),
+    pressRecentTabSwitcherKey('Escape'),
+    assertRecentTabSwitcherVisible(false),
+
+    openRecentTabSwitcher(),
+    pressRecentTabSwitcherKey('Enter'),
+    assertRecentTabSwitcherVisible(false),
+    assertTabActive('tab1'),
+  ],
+};
+
+// Chrome 不提供 modifier keyup；这个 guided case 验证重复命令和 600ms 超时近似流程。
+export const C2J_RECENT_TAB_REPEATED_SHORTCUT: TestCase = {
+  id: 'C.2j',
+  title: 'Repeated recent-tab shortcut opens and advances the overlay (guided)',
+  setup: async (getCtx) =>
+  {
+    await createTestSpace(getCtx, { ref: 'spaceA', name: TEST_SPACE_WORK_NAME });
+  },
+  steps: [
+    setFollowActiveTabMode('off'),
+    assertCommandRegistered('switch-recent-tab'),
+    ...switchSpaceVerified('spaceA'),
+    openRegularTab({ url: testUrl('c2j-tab1'), spaceRef: 'spaceA', tabRef: 'tab1' }),
+    activateTabNative('tab1'),
+    openRegularTab({ url: testUrl('c2j-tab2'), spaceRef: 'spaceA', tabRef: 'tab2' }),
+    activateTabNative('tab2'),
+    openRegularTab({ url: testUrl('c2j-tab3'), spaceRef: 'spaceA', tabRef: 'tab3' }),
+    activateTabNative('tab3'),
+
+    pause(
+      'Manual step: repeat the configured recent-tab shortcut while holding its modifiers',
+      [
+        'Make sure "Switch to Most Recent Tab" is assigned in chrome://extensions/shortcuts.',
+        'Press the shortcut once: the browser should immediately switch from tab3 to tab2 without showing the overlay.',
+        'Keep the modifier keys held and press the letter key again within 600ms: the overlay should appear and tab1 should become selected and active.',
+        'Stop pressing the shortcut. After about 600ms the overlay should close while tab1 stays active.',
+        'Return to the test panel and answer below.',
+      ],
+      'Did the second press show the frozen recent-tab overlay, and did it close automatically after you stopped pressing?'
+    ),
+
+    assertRecentTabSwitcherVisible(false),
+    assertTabActive('tab1'),
+  ],
+};
+
 export const SECTION_C_CASES: TestCase[] = [
   ...MODES.map(makeC1aCase),
   ...MODES.map(makeC1bCase),
@@ -1075,4 +1175,7 @@ export const SECTION_C_CASES: TestCase[] = [
   C2E_AUDIO_QUICK_JUMP_SAME_SPACE_COLLAPSED,
   C2F_AUDIO_DROPDOWN,
   C2G_HISTORY_DROPDOWN_GESTURE,
+  C2H_RECENT_TAB_TOGGLE,
+  C2I_RECENT_TAB_SWITCHER_OVERLAY,
+  C2J_RECENT_TAB_REPEATED_SHORTCUT,
 ];

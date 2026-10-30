@@ -14,6 +14,19 @@ import { testUrl } from './fixtures';
 import { tabHistoryManagerProxy } from '../../managers/proxies/tabHistoryManagerProxy';
 import { lastAudibleTrackerProxy } from '../../managers/proxies/lastAudibleTrackerProxy';
 
+/** 等待 Overlay 进入明确状态，避免固定 sleep 在慢机器上产生偶发失败。 */
+async function waitForRecentSwitcher(expected: boolean, timeoutMs = 2000): Promise<void>
+{
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline)
+  {
+    const visible = document.querySelector('[data-testid="recent-tab-switcher-backdrop"]') !== null;
+    if (visible === expected) return;
+    await sleep(25);
+  }
+  throw new Error(`recent-tab switcher did not become ${expected ? 'visible' : 'closed'} within ${timeoutMs}ms`);
+}
+
 /** Set the "Follow active tab" mode via the same chrome.storage.local key Settings writes - background.ts (space-switch) and useFollowActiveTab (scroll) both read this key directly, so this is the real setting, not a UI simulation. */
 export function setFollowActiveTabMode(mode: FollowActiveTabMode): TestStep
 {
@@ -75,6 +88,76 @@ export function navigateTabHistory(direction: 'prev' | 'next'): TestStep
     run: async (ctx) =>
     {
       await tabHistoryManagerProxy.navigate(ctx.windowId, direction === 'prev' ? -1 : 1);
+    },
+  };
+}
+
+/** 通过新的 MRU manager 接口立即切换到上一个使用的 Tab。 */
+export function switchToMostRecentTab(): TestStep
+{
+  return {
+    kind: 'action',
+    label: 'Switch to the most recently used Tab',
+    run: async (ctx) =>
+    {
+      const [activeTab] = await chrome.tabs.query({ active: true, windowId: ctx.windowId });
+      if (activeTab?.id === undefined) throw new Error('no active tab in the test window');
+
+      const switched = await tabHistoryManagerProxy.switchToMostRecent(ctx.windowId);
+      if (!switched) throw new Error('recent-tab manager reported no switch target');
+    },
+  };
+}
+
+/** 同时发送两次请求，覆盖真实命令快速重复触发时的串行化。 */
+export function switchToMostRecentTabTwiceConcurrently(): TestStep
+{
+  return {
+    kind: 'action',
+    label: 'Trigger the most-recent Tab switch twice concurrently',
+    run: async (ctx) =>
+    {
+      const results = await Promise.all([
+        tabHistoryManagerProxy.switchToMostRecent(ctx.windowId),
+        tabHistoryManagerProxy.switchToMostRecent(ctx.windowId),
+      ]);
+      if (results.some(result => !result))
+      {
+        throw new Error(`recent-tab manager rejected a concurrent switch: ${results.join(', ')}`);
+      }
+    },
+  };
+}
+
+/** 点击真实工具栏入口，验证 Overlay 不依赖测试专用消息。 */
+export function openRecentTabSwitcher(): TestStep
+{
+  return {
+    kind: 'action',
+    label: 'Open the recent-tab switcher from the toolbar',
+    run: async () =>
+    {
+      const button = document.querySelector<HTMLButtonElement>('[data-testid="open-recent-tab-switcher"]');
+      if (!button) throw new Error('recent-tab switcher toolbar button not found');
+      button.click();
+      await waitForRecentSwitcher(true);
+    },
+  };
+}
+
+/** 向真实 Overlay 发送键盘操作；Side Panel 当前持有焦点，因此无需模拟全局快捷键。 */
+export function pressRecentTabSwitcherKey(key: 'Enter' | 'Escape' | 'ArrowDown' | 'ArrowUp'): TestStep
+{
+  return {
+    kind: 'action',
+    label: `Press ${key} in the recent-tab switcher`,
+    run: async () =>
+    {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      if (key === 'Enter' || key === 'Escape')
+      {
+        await waitForRecentSwitcher(false);
+      }
     },
   };
 }
